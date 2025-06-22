@@ -1,5 +1,4 @@
 import streamlit as st
-import pyodbc
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -17,12 +16,34 @@ import asyncio
 import threading
 from typing import Dict, List, Any, Optional
 import logging
-from anthropic import Anthropic
 import requests
 import hashlib
 import hmac
 import base64
 from urllib.parse import quote
+
+# Try to import SQL Server connectivity libraries
+try:
+    import pyodbc
+    PYODBC_AVAILABLE = True
+except ImportError:
+    PYODBC_AVAILABLE = False
+    pyodbc = None
+
+try:
+    import sqlalchemy
+    from sqlalchemy import create_engine, text
+    SQLALCHEMY_AVAILABLE = True
+except ImportError:
+    SQLALCHEMY_AVAILABLE = False
+    sqlalchemy = None
+
+try:
+    from anthropic import Anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+    Anthropic = None
 
 warnings.filterwarnings('ignore')
 
@@ -111,26 +132,37 @@ class SQLServerConnector:
         self.server_configs = server_configs
         self.connections = {}
         self.connection_status = {}
+        self.demo_mode = not PYODBC_AVAILABLE
+        
+        if not PYODBC_AVAILABLE:
+            st.warning("⚠️ Running in Demo Mode: pyodbc not available. Install pyodbc and ODBC drivers for real SQL Server connections.")
         
     def test_connection(self, server_config: Dict) -> bool:
         """Test connection to SQL Server"""
-        try:
-            connection_string = (
-                f"DRIVER={{ODBC Driver 18 for SQL Server}};"
-                f"SERVER={server_config['server']};"
-                f"DATABASE={server_config['database']};"
-                f"UID={server_config['username']};"
-                f"PWD={server_config['password']};"
-                f"TrustServerCertificate=yes;"
-                f"Connection Timeout=10;"
-            )
-            
-            conn = pyodbc.connect(connection_string)
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1")
-            cursor.close()
-            conn.close()
+        if self.demo_mode:
+            # Simulate connection test in demo mode
             return True
+            
+        try:
+            if PYODBC_AVAILABLE:
+                connection_string = (
+                    f"DRIVER={{ODBC Driver 18 for SQL Server}};"
+                    f"SERVER={server_config['server']};"
+                    f"DATABASE={server_config['database']};"
+                    f"UID={server_config['username']};"
+                    f"PWD={server_config['password']};"
+                    f"TrustServerCertificate=yes;"
+                    f"Connection Timeout=10;"
+                )
+                
+                conn = pyodbc.connect(connection_string)
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                cursor.close()
+                conn.close()
+                return True
+            else:
+                return False
             
         except Exception as e:
             st.error(f"Connection failed for {server_config['name']}: {str(e)}")
@@ -138,22 +170,28 @@ class SQLServerConnector:
     
     def get_connection(self, server_name: str):
         """Get database connection for a server"""
+        if self.demo_mode:
+            return None
+            
         server_config = next((s for s in self.server_configs if s['name'] == server_name), None)
         if not server_config:
             return None
             
         try:
-            connection_string = (
-                f"DRIVER={{ODBC Driver 18 for SQL Server}};"
-                f"SERVER={server_config['server']};"
-                f"DATABASE={server_config['database']};"
-                f"UID={server_config['username']};"
-                f"PWD={server_config['password']};"
-                f"TrustServerCertificate=yes;"
-                f"Connection Timeout=30;"
-            )
-            
-            return pyodbc.connect(connection_string)
+            if PYODBC_AVAILABLE:
+                connection_string = (
+                    f"DRIVER={{ODBC Driver 18 for SQL Server}};"
+                    f"SERVER={server_config['server']};"
+                    f"DATABASE={server_config['database']};"
+                    f"UID={server_config['username']};"
+                    f"PWD={server_config['password']};"
+                    f"TrustServerCertificate=yes;"
+                    f"Connection Timeout=30;"
+                )
+                
+                return pyodbc.connect(connection_string)
+            else:
+                return None
             
         except Exception as e:
             st.error(f"Failed to connect to {server_name}: {str(e)}")
@@ -161,6 +199,10 @@ class SQLServerConnector:
     
     def execute_query(self, server_name: str, query: str) -> pd.DataFrame:
         """Execute query and return results as DataFrame"""
+        if self.demo_mode:
+            # Return demo data
+            return self._generate_demo_data(query)
+            
         conn = self.get_connection(server_name)
         if not conn:
             return pd.DataFrame()
@@ -171,7 +213,167 @@ class SQLServerConnector:
             return df
         except Exception as e:
             st.error(f"Query execution failed on {server_name}: {str(e)}")
-            conn.close()
+            if conn:
+                conn.close()
+            return pd.DataFrame()
+    
+    def _generate_demo_data(self, query: str) -> pd.DataFrame:
+        """Generate demo data based on query type"""
+        current_time = datetime.now()
+        
+        if 'system_metrics' in query:
+            return pd.DataFrame({
+                'timestamp': [current_time],
+                'processor_queue_length': [2],
+                'buffer_cache_hit_ratio': [np.random.uniform(90, 99)],
+                'page_life_expectancy': [np.random.uniform(300, 3000)],
+                'target_pages': [1000000],
+                'total_pages': [950000]
+            })
+        
+        elif 'wait_stats' in query:
+            wait_types = ['CXPACKET', 'ASYNC_NETWORK_IO', 'PAGEIOLATCH_SH', 'LCK_M_S', 'WRITELOG']
+            return pd.DataFrame({
+                'wait_type': wait_types,
+                'waiting_tasks_count': np.random.randint(1, 100, 5),
+                'wait_time_ms': np.random.randint(100, 10000, 5),
+                'max_wait_time_ms': np.random.randint(500, 5000, 5),
+                'signal_wait_time_ms': np.random.randint(10, 500, 5)
+            })
+        
+        elif 'active_connections' in query:
+            return pd.DataFrame({
+                'total_connections': [np.random.randint(50, 200)],
+                'running_sessions': [np.random.randint(5, 50)],
+                'sleeping_sessions': [np.random.randint(20, 100)],
+                'suspended_sessions': [np.random.randint(0, 10)]
+            })
+        
+        elif 'cpu_utilization' in query:
+            records = []
+            for i in range(30):
+                records.append({
+                    'record_id': i,
+                    'EventTime': current_time - timedelta(minutes=i),
+                    'SQLProcessUtilization': np.random.uniform(20, 80),
+                    'SystemIdle': np.random.uniform(10, 40),
+                    'OtherProcessUtilization': np.random.uniform(5, 30)
+                })
+            return pd.DataFrame(records)
+        
+        elif 'memory_usage' in query:
+            return pd.DataFrame({
+                'physical_memory_mb': [16384],
+                'virtual_memory_mb': [2097151],
+                'committed_memory_mb': [8192],
+                'committed_target_mb': [12288],
+                'visible_target_mb': [16384]
+            })
+        
+        elif 'blocking_sessions' in query:
+            # Sometimes return empty (no blocking), sometimes return data
+            if np.random.random() > 0.7:
+                return pd.DataFrame({
+                    'blocking_session_id': [52, 73],
+                    'session_id': [125, 134],
+                    'wait_type': ['LCK_M_X', 'LCK_M_S'],
+                    'wait_time': [5000, 2000],
+                    'wait_resource': ['PAGE: 5:1:12345', 'KEY: 6:72057594037927936'],
+                    'command': ['SELECT', 'UPDATE'],
+                    'status': ['suspended', 'suspended'],
+                    'cpu_time': [100, 250],
+                    'logical_reads': [1000, 2500],
+                    'reads': [10, 25],
+                    'writes': [5, 15]
+                })
+            else:
+                return pd.DataFrame()
+        
+        elif 'database_sizes' in query:
+            databases = ['ProductionDB', 'UserDB', 'LogDB', 'AnalyticsDB']
+            data = []
+            for db in databases:
+                data.extend([
+                    {
+                        'database_name': db,
+                        'type_desc': 'ROWS',
+                        'size_mb': np.random.uniform(1000, 10000),
+                        'max_size_mb': -1,
+                        'growth': 10,
+                        'is_percent_growth': True
+                    },
+                    {
+                        'database_name': db,
+                        'type_desc': 'LOG',
+                        'size_mb': np.random.uniform(100, 1000),
+                        'max_size_mb': -1,
+                        'growth': 10,
+                        'is_percent_growth': True
+                    }
+                ])
+            return pd.DataFrame(data)
+        
+        elif 'index_fragmentation' in query:
+            # Sometimes return fragmented indexes
+            if np.random.random() > 0.5:
+                return pd.DataFrame({
+                    'schema_name': ['dbo', 'sales', 'dbo'],
+                    'object_name': ['Orders', 'Customers', 'Products'],
+                    'index_name': ['IX_Orders_Date', 'PK_Customers', 'IX_Products_Category'],
+                    'index_type_desc': ['NONCLUSTERED INDEX', 'CLUSTERED INDEX', 'NONCLUSTERED INDEX'],
+                    'avg_fragmentation_in_percent': [45.2, 67.8, 52.1],
+                    'page_count': [2500, 5000, 1800]
+                })
+            else:
+                return pd.DataFrame()
+        
+        elif 'disk_io' in query:
+            databases = ['ProductionDB', 'UserDB', 'LogDB']
+            data = []
+            for db in databases:
+                data.extend([
+                    {
+                        'database_name': db,
+                        'physical_name': f'C:\\Data\\{db}.mdf',
+                        'num_of_reads': np.random.randint(10000, 100000),
+                        'num_of_writes': np.random.randint(5000, 50000),
+                        'mb_read': np.random.uniform(100, 1000),
+                        'mb_written': np.random.uniform(50, 500),
+                        'io_stall_read_ms': np.random.randint(1000, 10000),
+                        'io_stall_write_ms': np.random.randint(500, 5000)
+                    },
+                    {
+                        'database_name': db,
+                        'physical_name': f'C:\\Logs\\{db}_log.ldf',
+                        'num_of_reads': np.random.randint(1000, 10000),
+                        'num_of_writes': np.random.randint(10000, 100000),
+                        'mb_read': np.random.uniform(10, 100),
+                        'mb_written': np.random.uniform(100, 1000),
+                        'io_stall_read_ms': np.random.randint(100, 1000),
+                        'io_stall_write_ms': np.random.randint(1000, 10000)
+                    }
+                ])
+            return pd.DataFrame(data)
+        
+        elif 'backup_status' in query:
+            databases = ['ProductionDB', 'UserDB', 'LogDB', 'AnalyticsDB']
+            data = []
+            for db in databases:
+                last_full = current_time - timedelta(hours=np.random.uniform(1, 48))
+                last_diff = current_time - timedelta(hours=np.random.uniform(1, 24))
+                last_log = current_time - timedelta(minutes=np.random.uniform(15, 240))
+                
+                data.append({
+                    'database_name': db,
+                    'recovery_model_desc': np.random.choice(['FULL', 'SIMPLE', 'BULK_LOGGED']),
+                    'last_full_backup': last_full,
+                    'last_diff_backup': last_diff,
+                    'last_log_backup': last_log
+                })
+            return pd.DataFrame(data)
+        
+        else:
+            # Default empty dataframe
             return pd.DataFrame()
 
 # =================== SQL Server Metrics Collector ===================
@@ -363,6 +565,21 @@ class SQLServerMetricsCollector:
     def get_health_summary(self, server_name: str) -> Dict[str, Any]:
         """Get a comprehensive health summary for a server"""
         try:
+            if self.sql_connector.demo_mode:
+                # Generate demo health summary
+                return {
+                    "status": "online",
+                    "server_name": server_name,
+                    "sql_version": "Microsoft SQL Server 2019 (RTM) - 15.0.2000.5",
+                    "product_version": "15.0.2000.5",
+                    "edition": "Developer Edition (64-bit)",
+                    "product_level": "RTM",
+                    "current_time": datetime.now(),
+                    "online_databases": np.random.randint(4, 12),
+                    "user_sessions": np.random.randint(10, 50),
+                    "last_check": datetime.now()
+                }
+            
             # Get basic server info
             server_info_query = """
                 SELECT 
@@ -394,9 +611,20 @@ class SQLServerMetricsCollector:
 class ClaudeAIAnalyzer:
     def __init__(self, api_key: str):
         """Initialize Claude AI client"""
+        if not ANTHROPIC_AVAILABLE:
+            self.client = None
+            self.enabled = False
+            st.warning("⚠️ Anthropic library not available. Install 'anthropic' package for AI features.")
+            return
+            
         if api_key and api_key != "your_claude_api_key_here":
-            self.client = Anthropic(api_key=api_key)
-            self.enabled = True
+            try:
+                self.client = Anthropic(api_key=api_key)
+                self.enabled = True
+            except Exception as e:
+                self.client = None
+                self.enabled = False
+                st.error(f"Failed to initialize Claude AI: {str(e)}")
         else:
             self.client = None
             self.enabled = False
@@ -778,6 +1006,32 @@ def main():
     with st.sidebar:
         st.header("🔧 Enterprise Configuration")
         
+        # System Status
+        st.subheader("📊 System Status")
+        if not PYODBC_AVAILABLE:
+            st.error("❌ pyodbc not available")
+            st.info("💡 Install pyodbc for real SQL connections")
+        else:
+            st.success("✅ pyodbc available")
+        
+        if not ANTHROPIC_AVAILABLE:
+            st.warning("⚠️ anthropic not available")
+            st.info("💡 Install anthropic for AI features")
+        else:
+            st.success("✅ anthropic available")
+        
+        # Demo mode indicator
+        if not PYODBC_AVAILABLE:
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%); 
+                        padding: 1rem; border-radius: 8px; color: white; margin: 1rem 0;">
+                <strong>🎭 DEMO MODE</strong><br>
+                Using simulated data. Install pyodbc + ODBC drivers for real connections.
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
         # Claude AI Configuration
         st.subheader("🤖 Claude AI Settings")
         claude_api_key = st.text_input("Claude AI API Key", type="password", 
@@ -800,43 +1054,52 @@ def main():
         # SQL Server Configuration
         st.subheader("🗄️ SQL Server Configuration")
         
-        # Configuration for 3 SQL Servers
-        server_configs = []
-        
-        for i in range(1, 4):
-            with st.expander(f"SQL Server {i} Configuration"):
-                server_name = st.text_input(f"Server {i} Name", value=f"SQL-Server-{i}", key=f"name_{i}")
-                server_ip = st.text_input(f"Server {i} IP/FQDN", value="", key=f"ip_{i}")
-                server_port = st.text_input(f"Server {i} Port", value="1433", key=f"port_{i}")
-                database = st.text_input(f"Database", value="master", key=f"db_{i}")
-                username = st.text_input(f"Username", value="sa", key=f"user_{i}")
-                password = st.text_input(f"Password", type="password", value="", key=f"pass_{i}")
-                
-                if server_ip and password:
-                    server_configs.append({
-                        'name': server_name,
-                        'server': f"{server_ip},{server_port}",
-                        'database': database,
-                        'username': username,
-                        'password': password
-                    })
-        
-        # Initialize SQL connector if configurations are provided
-        if server_configs and len(server_configs) > 0:
-            if st.button("🔌 Test Connections"):
-                st.session_state.sql_connector = SQLServerConnector(server_configs)
-                st.session_state.metrics_collector = SQLServerMetricsCollector(st.session_state.sql_connector)
-                
-                # Test all connections
-                for config in server_configs:
-                    if st.session_state.sql_connector.test_connection(config):
-                        st.success(f"✅ {config['name']} connected")
-                    else:
-                        st.error(f"❌ {config['name']} failed")
+        if PYODBC_AVAILABLE:
+            # Configuration for 3 SQL Servers
+            server_configs = []
             
-            if st.session_state.sql_connector is None:
-                st.session_state.sql_connector = SQLServerConnector(server_configs)
-                st.session_state.metrics_collector = SQLServerMetricsCollector(st.session_state.sql_connector)
+            for i in range(1, 4):
+                with st.expander(f"SQL Server {i} Configuration"):
+                    server_name = st.text_input(f"Server {i} Name", value=f"SQL-Server-{i}", key=f"name_{i}")
+                    server_ip = st.text_input(f"Server {i} IP/FQDN", value="", key=f"ip_{i}")
+                    server_port = st.text_input(f"Server {i} Port", value="1433", key=f"port_{i}")
+                    database = st.text_input(f"Database", value="master", key=f"db_{i}")
+                    username = st.text_input(f"Username", value="sa", key=f"user_{i}")
+                    password = st.text_input(f"Password", type="password", value="", key=f"pass_{i}")
+                    
+                    if server_ip and password:
+                        server_configs.append({
+                            'name': server_name,
+                            'server': f"{server_ip},{server_port}",
+                            'database': database,
+                            'username': username,
+                            'password': password
+                        })
+            
+            # Initialize SQL connector if configurations are provided
+            if server_configs and len(server_configs) > 0:
+                if st.button("🔌 Test Connections"):
+                    st.session_state.sql_connector = SQLServerConnector(server_configs)
+                    st.session_state.metrics_collector = SQLServerMetricsCollector(st.session_state.sql_connector)
+                    
+                    # Test all connections
+                    for config in server_configs:
+                        if st.session_state.sql_connector.test_connection(config):
+                            st.success(f"✅ {config['name']} connected")
+                        else:
+                            st.error(f"❌ {config['name']} failed")
+                
+                if st.session_state.sql_connector is None:
+                    st.session_state.sql_connector = SQLServerConnector(server_configs)
+                    st.session_state.metrics_collector = SQLServerMetricsCollector(st.session_state.sql_connector)
+        else:
+            st.info("📝 **Demo Mode Configuration**")
+            st.write("Using 3 simulated SQL Server instances:")
+            st.write("• SQL-Server-1 (Demo)")
+            st.write("• SQL-Server-2 (Demo)")
+            st.write("• SQL-Server-3 (Demo)")
+            st.write("")
+            st.write("Install pyodbc + ODBC drivers for real connections.")
         
         st.markdown("---")
         
@@ -851,17 +1114,82 @@ def main():
         # Connection status
         st.subheader("🔗 Connection Status")
         if st.session_state.sql_connector:
-            st.success("SQL Connectors Ready")
+            if st.session_state.sql_connector.demo_mode:
+                st.warning("🎭 Demo Mode Active")
+                st.info("Simulated SQL Server data")
+            else:
+                st.success("✅ SQL Connectors Ready")
         else:
-            st.warning("Configure SQL Servers")
+            if PYODBC_AVAILABLE:
+                st.warning("⚠️ Configure SQL Servers")
+            else:
+                st.error("❌ Install pyodbc first")
         
         if st.session_state.claude_analyzer and st.session_state.claude_analyzer.enabled:
-            st.success("Claude AI Ready")
+            st.success("✅ Claude AI Ready")
         else:
-            st.warning("Configure Claude AI")
+            if ANTHROPIC_AVAILABLE:
+                st.warning("⚠️ Configure Claude AI")
+            else:
+                st.error("❌ Install anthropic package")
     
     # Check if systems are configured
-    if not st.session_state.sql_connector:
+    if not PYODBC_AVAILABLE:
+        st.error("🚫 SQL Server connectivity not available")
+        
+        with st.expander("📋 Installation Instructions", expanded=True):
+            st.markdown("""
+            ### 🔧 Install SQL Server Connectivity
+            
+            **Windows:**
+            ```bash
+            pip install pyodbc
+            ```
+            Then download and install [Microsoft ODBC Driver 18](https://docs.microsoft.com/en-us/sql/connect/odbc/download-odbc-driver-for-sql-server)
+            
+            **Linux (Ubuntu/Debian):**
+            ```bash
+            # Install Microsoft ODBC Driver
+            curl https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
+            curl https://packages.microsoft.com/config/ubuntu/20.04/prod.list | sudo tee /etc/apt/sources.list.d/mssql-release.list
+            sudo apt-get update
+            sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
+            
+            # Install Python package
+            pip install pyodbc
+            ```
+            
+            **macOS:**
+            ```bash
+            # Install Microsoft ODBC Driver
+            brew tap microsoft/mssql-release https://github.com/Microsoft/homebrew-mssql-release
+            HOMEBREW_NO_ENV_FILTERING=1 ACCEPT_EULA=Y brew install msodbcsql18
+            
+            # Install Python package
+            pip install pyodbc
+            ```
+            
+            ### 🤖 Enable AI Features
+            ```bash
+            pip install anthropic
+            ```
+            Then add your [Anthropic API key](https://console.anthropic.com/) in the sidebar.
+            """)
+        
+        st.info("🎭 **Currently running in DEMO MODE** with simulated data. Install dependencies above for real SQL Server monitoring.")
+        
+        # Continue with demo mode
+        if not st.session_state.sql_connector:
+            # Create demo configuration
+            demo_configs = [
+                {'name': 'SQL-Server-1', 'server': 'demo-server-1,1433', 'database': 'master', 'username': 'demo', 'password': 'demo'},
+                {'name': 'SQL-Server-2', 'server': 'demo-server-2,1433', 'database': 'master', 'username': 'demo', 'password': 'demo'},
+                {'name': 'SQL-Server-3', 'server': 'demo-server-3,1433', 'database': 'master', 'username': 'demo', 'password': 'demo'}
+            ]
+            st.session_state.sql_connector = SQLServerConnector(demo_configs)
+            st.session_state.metrics_collector = SQLServerMetricsCollector(st.session_state.sql_connector)
+    
+    elif not st.session_state.sql_connector:
         st.error("🚫 Please configure SQL Server connections in the sidebar")
         st.info("👈 Use the sidebar to configure your 3 SQL Server instances")
         return
