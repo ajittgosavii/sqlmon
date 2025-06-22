@@ -1,5 +1,5 @@
 import streamlit as st
-import boto3
+import pyodbc
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -17,1392 +17,1529 @@ import asyncio
 import threading
 from typing import Dict, List, Any, Optional
 import logging
+from anthropic import Anthropic
+import requests
+import hashlib
+import hmac
+import base64
+from urllib.parse import quote
 
 warnings.filterwarnings('ignore')
 
 # Configure Streamlit page
 st.set_page_config(
-    page_title="SQL Server AI Monitoring",
+    page_title="Enterprise SQL Server AI Monitor",
     page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better UI
+# Custom CSS for enterprise UI
 st.markdown("""
 <style>
     .metric-card {
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        padding: 1rem;
-        border-radius: 10px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1.5rem;
+        border-radius: 12px;
         color: white;
         margin: 0.5rem 0;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    }
+    .server-status-online {
+        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+        padding: 1rem;
+        border-radius: 8px;
+        color: white;
+        margin: 0.3rem 0;
+    }
+    .server-status-offline {
+        background: linear-gradient(135deg, #ff416c 0%, #ff4757 100%);
+        padding: 1rem;
+        border-radius: 8px;
+        color: white;
+        margin: 0.3rem 0;
     }
     .alert-critical {
-        background-color: #ff4444;
+        background: linear-gradient(135deg, #ff416c 0%, #ff4757 100%);
         color: white;
-        padding: 0.5rem;
-        border-radius: 5px;
-        margin: 0.2rem 0;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 0.3rem 0;
+        border-left: 5px solid #c0392b;
     }
     .alert-warning {
-        background-color: #ffaa00;
+        background: linear-gradient(135deg, #f39c12 0%, #f1c40f 100%);
         color: white;
-        padding: 0.5rem;
-        border-radius: 5px;
-        margin: 0.2rem 0;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 0.3rem 0;
+        border-left: 5px solid #e67e22;
     }
     .alert-info {
-        background-color: #0099cc;
+        background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
         color: white;
-        padding: 0.5rem;
-        border-radius: 5px;
-        margin: 0.2rem 0;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 0.3rem 0;
+        border-left: 5px solid #2c3e50;
+    }
+    .claude-insight {
+        background: linear-gradient(135deg, #8e44ad 0%, #9b59b6 100%);
+        color: white;
+        padding: 1.5rem;
+        border-radius: 12px;
+        margin: 1rem 0;
+        border-left: 5px solid #6c3483;
     }
     .stTabs [data-baseweb="tab-list"] {
         gap: 2px;
     }
     .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        padding-left: 20px;
-        padding-right: 20px;
+        height: 60px;
+        padding-left: 25px;
+        padding-right: 25px;
+        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        border-radius: 8px 8px 0 0;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# =================== AWS CloudWatch Integration ===================
-class AWSCloudWatchConnector:
-    def __init__(self, aws_access_key: str, aws_secret_key: str, region: str = 'us-east-1'):
-        """Initialize AWS CloudWatch connection"""
-        self.session = boto3.Session(
-            aws_access_key_id=aws_access_key,
-            aws_secret_access_key=aws_secret_key,
-            region_name=region
-        )
-        self.cloudwatch = self.session.client('cloudwatch')
-        self.logs_client = self.session.client('logs')
-        self.ssm_client = self.session.client('ssm')
-    
-    def get_metric_data(self, metric_queries: List[Dict], start_time: datetime, end_time: datetime) -> pd.DataFrame:
-        """Retrieve metric data from CloudWatch"""
+# =================== SQL Server Connection Manager ===================
+class SQLServerConnector:
+    def __init__(self, server_configs: List[Dict]):
+        """Initialize SQL Server connections"""
+        self.server_configs = server_configs
+        self.connections = {}
+        self.connection_status = {}
+        
+    def test_connection(self, server_config: Dict) -> bool:
+        """Test connection to SQL Server"""
         try:
-            response = self.cloudwatch.get_metric_data(
-                MetricDataQueries=metric_queries,
-                StartTime=start_time,
-                EndTime=end_time
+            connection_string = (
+                f"DRIVER={{ODBC Driver 18 for SQL Server}};"
+                f"SERVER={server_config['server']};"
+                f"DATABASE={server_config['database']};"
+                f"UID={server_config['username']};"
+                f"PWD={server_config['password']};"
+                f"TrustServerCertificate=yes;"
+                f"Connection Timeout=10;"
             )
             
-            data = []
-            for result in response['MetricDataResults']:
-                for timestamp, value in zip(result['Timestamps'], result['Values']):
-                    data.append({
-                        'timestamp': timestamp,
-                        'metric': result['Id'],
-                        'value': value
-                    })
+            conn = pyodbc.connect(connection_string)
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.close()
+            conn.close()
+            return True
             
-            return pd.DataFrame(data)
         except Exception as e:
-            st.error(f"Error fetching metrics: {str(e)}")
+            st.error(f"Connection failed for {server_config['name']}: {str(e)}")
+            return False
+    
+    def get_connection(self, server_name: str):
+        """Get database connection for a server"""
+        server_config = next((s for s in self.server_configs if s['name'] == server_name), None)
+        if not server_config:
+            return None
+            
+        try:
+            connection_string = (
+                f"DRIVER={{ODBC Driver 18 for SQL Server}};"
+                f"SERVER={server_config['server']};"
+                f"DATABASE={server_config['database']};"
+                f"UID={server_config['username']};"
+                f"PWD={server_config['password']};"
+                f"TrustServerCertificate=yes;"
+                f"Connection Timeout=30;"
+            )
+            
+            return pyodbc.connect(connection_string)
+            
+        except Exception as e:
+            st.error(f"Failed to connect to {server_name}: {str(e)}")
+            return None
+    
+    def execute_query(self, server_name: str, query: str) -> pd.DataFrame:
+        """Execute query and return results as DataFrame"""
+        conn = self.get_connection(server_name)
+        if not conn:
             return pd.DataFrame()
-    
-    def query_logs(self, log_group: str, query: str, start_time: datetime, end_time: datetime) -> List[Dict]:
-        """Query CloudWatch Logs"""
+        
         try:
-            start_query_response = self.logs_client.start_query(
-                logGroupName=log_group,
-                startTime=int(start_time.timestamp()),
-                endTime=int(end_time.timestamp()),
-                queryString=query
+            df = pd.read_sql(query, conn)
+            conn.close()
+            return df
+        except Exception as e:
+            st.error(f"Query execution failed on {server_name}: {str(e)}")
+            conn.close()
+            return pd.DataFrame()
+
+# =================== SQL Server Metrics Collector ===================
+class SQLServerMetricsCollector:
+    def __init__(self, sql_connector: SQLServerConnector):
+        self.sql_connector = sql_connector
+        
+        # Comprehensive SQL Server monitoring queries
+        self.queries = {
+            'system_metrics': """
+                SELECT 
+                    GETDATE() as timestamp,
+                    (SELECT counter_value FROM sys.dm_os_performance_counters 
+                     WHERE counter_name = 'Processor Queue Length') as processor_queue_length,
+                    (SELECT cntr_value FROM sys.dm_os_performance_counters 
+                     WHERE counter_name = 'Buffer cache hit ratio') as buffer_cache_hit_ratio,
+                    (SELECT cntr_value FROM sys.dm_os_performance_counters 
+                     WHERE counter_name = 'Page life expectancy') as page_life_expectancy,
+                    (SELECT cntr_value FROM sys.dm_os_performance_counters 
+                     WHERE counter_name = 'Target pages') as target_pages,
+                    (SELECT cntr_value FROM sys.dm_os_performance_counters 
+                     WHERE counter_name = 'Total pages') as total_pages
+            """,
+            
+            'wait_stats': """
+                SELECT TOP 10
+                    wait_type,
+                    waiting_tasks_count,
+                    wait_time_ms,
+                    max_wait_time_ms,
+                    signal_wait_time_ms
+                FROM sys.dm_os_wait_stats
+                WHERE wait_type NOT IN (
+                    'CLR_SEMAPHORE', 'LAZYWRITER_SLEEP', 'RESOURCE_QUEUE', 'SLEEP_TASK',
+                    'SLEEP_SYSTEMTASK', 'SQLTRACE_WAIT', 'WAITFOR', 'BROKER_TASK_STOP',
+                    'CHECKPOINT_QUEUE', 'FT_IFTS_SCHEDULER_IDLE_WAIT', 'XE_DISPATCHER_WAIT'
+                )
+                ORDER BY wait_time_ms DESC
+            """,
+            
+            'blocking_sessions': """
+                SELECT 
+                    blocking_session_id,
+                    session_id,
+                    wait_type,
+                    wait_time,
+                    wait_resource,
+                    command,
+                    status,
+                    cpu_time,
+                    logical_reads,
+                    reads,
+                    writes
+                FROM sys.dm_exec_requests
+                WHERE blocking_session_id <> 0
+            """,
+            
+            'database_sizes': """
+                SELECT 
+                    DB_NAME(database_id) AS database_name,
+                    type_desc,
+                    size * 8.0 / 1024 AS size_mb,
+                    max_size * 8.0 / 1024 AS max_size_mb,
+                    growth,
+                    is_percent_growth
+                FROM sys.master_files
+                WHERE database_id > 4
+            """,
+            
+            'index_fragmentation': """
+                SELECT 
+                    OBJECT_SCHEMA_NAME(ips.object_id) AS schema_name,
+                    OBJECT_NAME(ips.object_id) AS object_name,
+                    i.name AS index_name,
+                    ips.index_type_desc,
+                    ips.avg_fragmentation_in_percent,
+                    ips.page_count
+                FROM sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL, 'SAMPLED') ips
+                JOIN sys.indexes i ON ips.object_id = i.object_id AND ips.index_id = i.index_id
+                WHERE ips.avg_fragmentation_in_percent > 30 AND ips.page_count > 1000
+                ORDER BY ips.avg_fragmentation_in_percent DESC
+            """,
+            
+            'active_connections': """
+                SELECT 
+                    COUNT(*) as total_connections,
+                    SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) as running_sessions,
+                    SUM(CASE WHEN status = 'sleeping' THEN 1 ELSE 0 END) as sleeping_sessions,
+                    SUM(CASE WHEN status = 'suspended' THEN 1 ELSE 0 END) as suspended_sessions
+                FROM sys.dm_exec_sessions
+                WHERE is_user_process = 1
+            """,
+            
+            'cpu_utilization': """
+                DECLARE @cpu_count int
+                SELECT @cpu_count = cpu_count FROM sys.dm_os_sys_info
+                
+                SELECT TOP 30
+                    record_id,
+                    DateAdd(ms, -1 * (@cpu_count - record_id), GetDate()) AS EventTime,
+                    SQLProcessUtilization,
+                    SystemIdle,
+                    100 - SystemIdle - SQLProcessUtilization AS OtherProcessUtilization
+                FROM (
+                    SELECT 
+                        record.value('(./Record/@id)[1]', 'int') AS record_id,
+                        record.value('(./Record/SchedulerMonitorEvent/SystemHealth/SystemIdle)[1]', 'int') AS SystemIdle,
+                        record.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]', 'int') AS SQLProcessUtilization
+                    FROM (
+                        SELECT CAST(record AS xml) AS record 
+                        FROM sys.dm_os_ring_buffers 
+                        WHERE ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR'
+                        AND record LIKE N'%<SystemHealth>%'
+                    ) AS x
+                ) AS y
+                ORDER BY record_id DESC
+            """,
+            
+            'memory_usage': """
+                SELECT 
+                    (physical_memory_kb / 1024.0) AS physical_memory_mb,
+                    (virtual_memory_kb / 1024.0) AS virtual_memory_mb,
+                    (committed_kb / 1024.0) AS committed_memory_mb,
+                    (committed_target_kb / 1024.0) AS committed_target_mb,
+                    (visible_target_kb / 1024.0) AS visible_target_mb
+                FROM sys.dm_os_sys_memory
+            """,
+            
+            'disk_io': """
+                SELECT 
+                    DB_NAME(vfs.database_id) AS database_name,
+                    mf.physical_name,
+                    vfs.num_of_reads,
+                    vfs.num_of_writes,
+                    vfs.num_of_bytes_read / 1024 / 1024 AS mb_read,
+                    vfs.num_of_bytes_written / 1024 / 1024 AS mb_written,
+                    vfs.io_stall_read_ms,
+                    vfs.io_stall_write_ms
+                FROM sys.dm_io_virtual_file_stats(NULL, NULL) vfs
+                JOIN sys.master_files mf ON vfs.database_id = mf.database_id 
+                    AND vfs.file_id = mf.file_id
+                WHERE vfs.database_id > 4
+            """,
+            
+            'backup_status': """
+                SELECT 
+                    d.name AS database_name,
+                    d.recovery_model_desc,
+                    COALESCE(
+                        (SELECT MAX(backup_finish_date) 
+                         FROM msdb.dbo.backupset bs 
+                         WHERE bs.database_name = d.name AND bs.type = 'D'),
+                        '1900-01-01'
+                    ) AS last_full_backup,
+                    COALESCE(
+                        (SELECT MAX(backup_finish_date) 
+                         FROM msdb.dbo.backupset bs 
+                         WHERE bs.database_name = d.name AND bs.type = 'I'),
+                        '1900-01-01'
+                    ) AS last_diff_backup,
+                    COALESCE(
+                        (SELECT MAX(backup_finish_date) 
+                         FROM msdb.dbo.backupset bs 
+                         WHERE bs.database_name = d.name AND bs.type = 'L'),
+                        '1900-01-01'
+                    ) AS last_log_backup
+                FROM sys.databases d
+                WHERE d.database_id > 4 AND d.state = 0
+            """
+        }
+    
+    def collect_all_metrics(self, server_name: str) -> Dict[str, pd.DataFrame]:
+        """Collect all metrics from a SQL Server instance"""
+        metrics = {}
+        
+        for metric_name, query in self.queries.items():
+            try:
+                df = self.sql_connector.execute_query(server_name, query)
+                if not df.empty:
+                    metrics[metric_name] = df
+                else:
+                    metrics[metric_name] = pd.DataFrame()
+            except Exception as e:
+                st.warning(f"Failed to collect {metric_name} from {server_name}: {str(e)}")
+                metrics[metric_name] = pd.DataFrame()
+        
+        return metrics
+    
+    def get_health_summary(self, server_name: str) -> Dict[str, Any]:
+        """Get a comprehensive health summary for a server"""
+        try:
+            # Get basic server info
+            server_info_query = """
+                SELECT 
+                    @@SERVERNAME as server_name,
+                    @@VERSION as sql_version,
+                    SERVERPROPERTY('ProductVersion') as product_version,
+                    SERVERPROPERTY('Edition') as edition,
+                    SERVERPROPERTY('ProductLevel') as product_level,
+                    GETDATE() as current_time,
+                    (SELECT COUNT(*) FROM sys.databases WHERE state = 0) as online_databases,
+                    (SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE is_user_process = 1) as user_sessions
+            """
+            
+            server_info = self.sql_connector.execute_query(server_name, server_info_query)
+            
+            if server_info.empty:
+                return {"status": "offline", "error": "No data returned"}
+            
+            info = server_info.iloc[0].to_dict()
+            info["status"] = "online"
+            info["last_check"] = datetime.now()
+            
+            return info
+            
+        except Exception as e:
+            return {"status": "offline", "error": str(e), "last_check": datetime.now()}
+
+# =================== Claude AI Integration ===================
+class ClaudeAIAnalyzer:
+    def __init__(self, api_key: str):
+        """Initialize Claude AI client"""
+        if api_key and api_key != "your_claude_api_key_here":
+            self.client = Anthropic(api_key=api_key)
+            self.enabled = True
+        else:
+            self.client = None
+            self.enabled = False
+    
+    def analyze_performance_metrics(self, server_metrics: Dict[str, Dict]) -> Dict[str, str]:
+        """Use Claude AI to analyze performance metrics across all servers"""
+        if not self.enabled:
+            return {"analysis": "Claude AI not configured", "recommendations": "Configure Claude AI API key in sidebar"}
+        
+        try:
+            # Prepare metrics summary for Claude
+            metrics_summary = self._prepare_metrics_summary(server_metrics)
+            
+            prompt = f"""
+            As a SQL Server performance expert, analyze the following real-time metrics from a multi-server environment and provide:
+            
+            1. Overall health assessment
+            2. Critical issues that need immediate attention
+            3. Performance bottlenecks
+            4. Proactive recommendations
+            5. Risk assessment for each server
+            
+            Server Metrics Data:
+            {metrics_summary}
+            
+            Focus on:
+            - CPU and memory utilization patterns
+            - Blocking and wait statistics
+            - Index fragmentation issues
+            - Backup compliance
+            - Disk I/O performance
+            - Buffer cache efficiency
+            
+            Provide actionable insights in a structured format.
+            """
+            
+            response = self.client.messages.create(
+                model="claude-3-sonnet-20240229",
+                max_tokens=1500,
+                messages=[{"role": "user", "content": prompt}]
             )
             
-            query_id = start_query_response['queryId']
+            analysis = response.content[0].text
             
-            # Wait for query completion
-            while True:
-                time.sleep(1)
-                response = self.logs_client.get_query_results(queryId=query_id)
-                if response['status'] == 'Complete':
-                    return response['results']
-                elif response['status'] == 'Failed':
-                    st.error("Log query failed")
-                    return []
-                    
+            # Parse response into sections
+            sections = self._parse_claude_response(analysis)
+            return sections
+            
         except Exception as e:
-            st.error(f"Error querying logs: {str(e)}")
-            return []
+            return {"analysis": f"Claude AI analysis failed: {str(e)}", "recommendations": "Check API configuration"}
     
-    def send_custom_metric(self, namespace: str, metric_name: str, value: float, unit: str = 'Count'):
-        """Send custom metric to CloudWatch"""
+    def predict_failures(self, historical_data: Dict, current_metrics: Dict) -> Dict[str, Any]:
+        """Use Claude AI to predict potential failures"""
+        if not self.enabled:
+            return {"predictions": "Claude AI not configured"}
+        
         try:
-            self.cloudwatch.put_metric_data(
-                Namespace=namespace,
-                MetricData=[
-                    {
-                        'MetricName': metric_name,
-                        'Value': value,
-                        'Unit': unit,
-                        'Timestamp': datetime.utcnow()
-                    }
-                ]
+            data_summary = self._prepare_failure_prediction_data(historical_data, current_metrics)
+            
+            prompt = f"""
+            As a SQL Server reliability expert, analyze the following historical and current performance data to predict potential failures:
+            
+            Data Summary:
+            {data_summary}
+            
+            Provide:
+            1. Failure probability for each server (0-100%)
+            2. Most likely failure scenarios
+            3. Time-to-failure estimates
+            4. Prevention strategies
+            5. Risk mitigation steps
+            
+            Focus on patterns that typically lead to:
+            - Memory pressure
+            - Disk space exhaustion
+            - Deadlock scenarios
+            - Performance degradation
+            - Service outages
+            """
+            
+            response = self.client.messages.create(
+                model="claude-3-sonnet-20240229",
+                max_tokens=1200,
+                messages=[{"role": "user", "content": prompt}]
             )
+            
+            return {"predictions": response.content[0].text}
+            
         except Exception as e:
-            st.error(f"Error sending metric: {str(e)}")
-
-# =================== Machine Learning Models ===================
-class SQLServerMLPredictor:
-    def __init__(self):
-        self.anomaly_detector = IsolationForest(contamination=0.1, random_state=42)
-        self.failure_predictor = RandomForestClassifier(n_estimators=100, random_state=42)
-        self.scaler = StandardScaler()
-        self.is_trained = False
+            return {"predictions": f"Prediction analysis failed: {str(e)}"}
     
-    def prepare_features(self, data: pd.DataFrame) -> np.ndarray:
-        """Prepare features for ML models"""
-        if data.empty:
-            return np.array([])
-        
-        # Feature engineering
-        features = []
-        
-        # Basic metrics
-        if 'cpu_usage' in data.columns:
-            features.extend([
-                data['cpu_usage'].mean(),
-                data['cpu_usage'].std(),
-                data['cpu_usage'].max()
-            ])
-        
-        # Memory metrics
-        if 'memory_usage' in data.columns:
-            features.extend([
-                data['memory_usage'].mean(),
-                data['memory_usage'].std(),
-                data['memory_usage'].max()
-            ])
-        
-        # SQL Server specific metrics
-        sql_metrics = ['connections', 'lock_waits', 'buffer_cache_hit_ratio', 'page_life_expectancy']
-        for metric in sql_metrics:
-            if metric in data.columns:
-                features.extend([
-                    data[metric].mean(),
-                    data[metric].std() if len(data) > 1 else 0
-                ])
-            else:
-                features.extend([0, 0])  # Default values if metric not available
-        
-        # Time-based features
-        if 'timestamp' in data.columns:
-            data['hour'] = pd.to_datetime(data['timestamp']).dt.hour
-            data['day_of_week'] = pd.to_datetime(data['timestamp']).dt.dayofweek
-            features.extend([
-                data['hour'].mode().iloc[0] if len(data) > 0 else 12,
-                data['day_of_week'].mode().iloc[0] if len(data) > 0 else 1
-            ])
-        else:
-            features.extend([12, 1])  # Default values
-        
-        return np.array(features).reshape(1, -1)
-    
-    def train_models(self, historical_data: pd.DataFrame):
-        """Train ML models with historical data"""
-        if historical_data.empty:
-            st.warning("No historical data available for training")
-            return
-        
-        # Prepare training data
-        X = []
-        y_anomaly = []
-        y_failure = []
-        
-        # Group data by time windows
-        historical_data['timestamp'] = pd.to_datetime(historical_data['timestamp'])
-        historical_data = historical_data.sort_values('timestamp')
-        
-        # Create time windows (1-hour intervals)
-        window_size = timedelta(hours=1)
-        current_time = historical_data['timestamp'].min()
-        end_time = historical_data['timestamp'].max()
-        
-        while current_time < end_time:
-            window_end = current_time + window_size
-            window_data = historical_data[
-                (historical_data['timestamp'] >= current_time) & 
-                (historical_data['timestamp'] < window_end)
-            ]
-            
-            if not window_data.empty:
-                features = self.prepare_features(window_data)
-                if features.size > 0:
-                    X.append(features[0])
-                    
-                    # Label generation (simplified - you should use actual failure data)
-                    # Anomaly: high resource usage or error counts
-                    is_anomaly = (
-                        window_data.get('cpu_usage', pd.Series([0])).max() > 80 or
-                        window_data.get('memory_usage', pd.Series([0])).max() > 85 or
-                        window_data.get('error_count', pd.Series([0])).sum() > 0
-                    )
-                    y_anomaly.append(1 if is_anomaly else 0)
-                    
-                    # Failure prediction (look ahead 24 hours)
-                    future_data = historical_data[
-                        (historical_data['timestamp'] >= window_end) & 
-                        (historical_data['timestamp'] < window_end + timedelta(hours=24))
-                    ]
-                    has_failure = future_data.get('failure', pd.Series([False])).any()
-                    y_failure.append(1 if has_failure else 0)
-            
-            current_time = window_end
-        
-        if len(X) > 10:  # Minimum samples for training
-            X = np.array(X)
-            X = self.scaler.fit_transform(X)
-            
-            # Train anomaly detector
-            self.anomaly_detector.fit(X)
-            
-            # Train failure predictor if we have enough positive samples
-            if len(set(y_failure)) > 1:
-                self.failure_predictor.fit(X, y_failure)
-            
-            self.is_trained = True
-            st.success("ML models trained successfully!")
-        else:
-            st.warning("Insufficient data for model training")
-    
-    def predict_anomaly(self, current_data: pd.DataFrame) -> Dict[str, Any]:
-        """Predict anomalies in current data"""
-        if not self.is_trained:
-            return {"anomaly_score": 0, "is_anomaly": False, "confidence": 0}
-        
-        features = self.prepare_features(current_data)
-        if features.size == 0:
-            return {"anomaly_score": 0, "is_anomaly": False, "confidence": 0}
-        
-        features_scaled = self.scaler.transform(features)
-        anomaly_score = self.anomaly_detector.decision_function(features_scaled)[0]
-        is_anomaly = self.anomaly_detector.predict(features_scaled)[0] == -1
-        
-        # Convert score to 0-100 scale
-        confidence = min(100, max(0, abs(anomaly_score) * 20))
-        
-        return {
-            "anomaly_score": anomaly_score,
-            "is_anomaly": is_anomaly,
-            "confidence": confidence
-        }
-    
-    def predict_failure(self, current_data: pd.DataFrame) -> Dict[str, Any]:
-        """Predict potential failures"""
-        if not self.is_trained:
-            return {"failure_probability": 0, "risk_level": "Unknown", "confidence": 0}
-        
-        features = self.prepare_features(current_data)
-        if features.size == 0:
-            return {"failure_probability": 0, "risk_level": "Unknown", "confidence": 0}
-        
-        features_scaled = self.scaler.transform(features)
+    def generate_maintenance_plan(self, server_metrics: Dict, alert_history: List) -> str:
+        """Generate intelligent maintenance recommendations"""
+        if not self.enabled:
+            return "Claude AI not configured for maintenance planning"
         
         try:
-            failure_prob = self.failure_predictor.predict_proba(features_scaled)[0][1]
-        except:
-            failure_prob = 0
-        
-        # Determine risk level
-        if failure_prob > 0.7:
-            risk_level = "Critical"
-        elif failure_prob > 0.4:
-            risk_level = "High"
-        elif failure_prob > 0.2:
-            risk_level = "Medium"
-        else:
-            risk_level = "Low"
-        
-        return {
-            "failure_probability": failure_prob * 100,
-            "risk_level": risk_level,
-            "confidence": failure_prob * 100
-        }
-
-# =================== Data Generator (for demo purposes) ===================
-class DataGenerator:
-    """Generate synthetic SQL Server metrics for demonstration"""
+            context = self._prepare_maintenance_context(server_metrics, alert_history)
+            
+            prompt = f"""
+            As a SQL Server DBA, create a comprehensive maintenance plan based on:
+            
+            Current System State:
+            {context}
+            
+            Generate a prioritized maintenance plan including:
+            1. Immediate actions (next 24 hours)
+            2. Short-term tasks (next week)
+            3. Long-term improvements (next month)
+            4. Preventive measures
+            5. Resource optimization opportunities
+            
+            Include specific SQL Server maintenance tasks like:
+            - Index maintenance requirements
+            - Statistics updates
+            - Database integrity checks
+            - Backup strategy optimization
+            - Performance tuning recommendations
+            """
+            
+            response = self.client.messages.create(
+                model="claude-3-sonnet-20240229",
+                max_tokens=1500,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            return response.content[0].text
+            
+        except Exception as e:
+            return f"Maintenance plan generation failed: {str(e)}"
     
-    @staticmethod
-    def generate_realtime_metrics(node_count: int = 3) -> Dict[str, pd.DataFrame]:
-        """Generate real-time metrics for all nodes"""
-        current_time = datetime.now()
-        nodes_data = {}
+    def _prepare_metrics_summary(self, server_metrics: Dict) -> str:
+        """Prepare a concise summary of metrics for Claude analysis"""
+        summary = []
         
-        for node_id in range(1, node_count + 1):
-            # Generate synthetic metrics with some randomness
-            base_cpu = 45 + np.random.normal(0, 10)
-            base_memory = 60 + np.random.normal(0, 15)
+        for server_name, metrics in server_metrics.items():
+            server_summary = [f"\n{server_name}:"]
             
-            # Add some correlation and patterns
-            if node_id == 1:  # Primary replica might have higher load
-                base_cpu += 15
-                base_memory += 10
+            # System metrics
+            if 'system_metrics' in metrics and not metrics['system_metrics'].empty:
+                sys_metrics = metrics['system_metrics'].iloc[0]
+                server_summary.append(f"  Buffer Cache Hit Ratio: {sys_metrics.get('buffer_cache_hit_ratio', 'N/A')}")
+                server_summary.append(f"  Page Life Expectancy: {sys_metrics.get('page_life_expectancy', 'N/A')}")
             
-            data = {
-                'timestamp': [current_time - timedelta(minutes=i) for i in range(30, 0, -1)],
-                'cpu_usage': np.clip([base_cpu + np.random.normal(0, 5) for _ in range(30)], 0, 100),
-                'memory_usage': np.clip([base_memory + np.random.normal(0, 8) for _ in range(30)], 0, 100),
-                'disk_io': np.random.exponential(50, 30),
-                'connections': np.random.poisson(100, 30),
-                'lock_waits': np.random.exponential(5, 30),
-                'buffer_cache_hit_ratio': np.clip(np.random.normal(95, 2, 30), 85, 100),
-                'page_life_expectancy': np.random.normal(3000, 500, 30),
-                'log_growth_rate': np.random.exponential(10, 30),
-                'backup_size': np.random.normal(500, 100, 30),
-                'network_io': np.random.exponential(25, 30)
-            }
+            # Connection info
+            if 'active_connections' in metrics and not metrics['active_connections'].empty:
+                conn_metrics = metrics['active_connections'].iloc[0]
+                server_summary.append(f"  Total Connections: {conn_metrics.get('total_connections', 'N/A')}")
+                server_summary.append(f"  Running Sessions: {conn_metrics.get('running_sessions', 'N/A')}")
             
-            nodes_data[f'Node_{node_id}'] = pd.DataFrame(data)
+            # Wait stats
+            if 'wait_stats' in metrics and not metrics['wait_stats'].empty:
+                top_wait = metrics['wait_stats'].iloc[0]
+                server_summary.append(f"  Top Wait Type: {top_wait.get('wait_type', 'N/A')}")
+                server_summary.append(f"  Wait Time (ms): {top_wait.get('wait_time_ms', 'N/A')}")
+            
+            # Blocking
+            if 'blocking_sessions' in metrics and not metrics['blocking_sessions'].empty:
+                blocking_count = len(metrics['blocking_sessions'])
+                server_summary.append(f"  Blocking Sessions: {blocking_count}")
+            
+            summary.extend(server_summary)
         
-        return nodes_data
+        return "\n".join(summary)
     
-    @staticmethod
-    def generate_historical_data(days: int = 30) -> pd.DataFrame:
-        """Generate historical data for model training"""
-        end_time = datetime.now()
-        start_time = end_time - timedelta(days=days)
+    def _prepare_failure_prediction_data(self, historical_data: Dict, current_metrics: Dict) -> str:
+        """Prepare data for failure prediction analysis"""
+        summary = ["Historical Trends and Current State:"]
         
-        timestamps = pd.date_range(start_time, end_time, freq='5T')
-        n_samples = len(timestamps)
+        for server_name in current_metrics.keys():
+            summary.append(f"\n{server_name}:")
+            summary.append("  Current State: [summarized current metrics]")
+            summary.append("  Recent Trends: [historical patterns]")
+            # Add more detailed analysis here based on your historical data structure
         
-        # Generate patterns with some seasonality
-        hours = np.array([t.hour for t in timestamps])
-        daily_pattern = np.sin(2 * np.pi * hours / 24) * 10 + 50
+        return "\n".join(summary)
+    
+    def _prepare_maintenance_context(self, server_metrics: Dict, alert_history: List) -> str:
+        """Prepare context for maintenance planning"""
+        context = ["System Context for Maintenance Planning:"]
         
-        data = {
-            'timestamp': timestamps,
-            'cpu_usage': np.clip(daily_pattern + np.random.normal(0, 10, n_samples), 0, 100),
-            'memory_usage': np.clip(daily_pattern + np.random.normal(10, 8, n_samples), 0, 100),
-            'connections': np.random.poisson(100, n_samples),
-            'lock_waits': np.random.exponential(5, n_samples),
-            'buffer_cache_hit_ratio': np.clip(np.random.normal(95, 2, n_samples), 85, 100),
-            'page_life_expectancy': np.random.normal(3000, 500, n_samples),
-            'error_count': np.random.poisson(0.1, n_samples),  # Rare errors
-            'failure': np.random.choice([True, False], n_samples, p=[0.001, 0.999])  # Very rare failures
+        # Recent alerts summary
+        if alert_history:
+            context.append(f"\nRecent Alerts ({len(alert_history)} total):")
+            for alert in alert_history[-5:]:  # Last 5 alerts
+                context.append(f"  - {alert.get('severity', 'Unknown')}: {alert.get('message', 'No message')}")
+        
+        # Current metrics summary
+        context.extend(["\nCurrent Server States:"])
+        for server_name, metrics in server_metrics.items():
+            context.append(f"  {server_name}: [health summary]")
+        
+        return "\n".join(context)
+    
+    def _parse_claude_response(self, response: str) -> Dict[str, str]:
+        """Parse Claude's response into structured sections"""
+        sections = {
+            "overall_health": "",
+            "critical_issues": "",
+            "recommendations": "",
+            "risk_assessment": ""
         }
         
-        return pd.DataFrame(data)
+        # Simple parsing - in production, you might want more sophisticated parsing
+        if "health" in response.lower():
+            sections["overall_health"] = response[:500]  # First part
+        
+        sections["recommendations"] = response[-500:]  # Last part
+        
+        return sections
 
-# =================== Alert Management System ===================
-class AlertManager:
+# =================== Enhanced Alert Management ===================
+class EnterpriseAlertManager:
     def __init__(self):
         self.alert_rules = {
-            'cpu_high': {'threshold': 80, 'severity': 'warning', 'message': 'High CPU usage detected'},
-            'cpu_critical': {'threshold': 95, 'severity': 'critical', 'message': 'Critical CPU usage'},
-            'memory_high': {'threshold': 85, 'severity': 'warning', 'message': 'High memory usage'},
-            'memory_critical': {'threshold': 95, 'severity': 'critical', 'message': 'Critical memory usage'},
-            'connections_high': {'threshold': 200, 'severity': 'warning', 'message': 'High connection count'},
-            'buffer_cache_low': {'threshold': 90, 'severity': 'warning', 'message': 'Low buffer cache hit ratio'},
-            'page_life_low': {'threshold': 300, 'severity': 'critical', 'message': 'Low page life expectancy'}
+            'cpu_high': {'threshold': 80, 'severity': 'warning', 'duration': 300},
+            'cpu_critical': {'threshold': 95, 'severity': 'critical', 'duration': 120},
+            'memory_high': {'threshold': 85, 'severity': 'warning', 'duration': 300},
+            'memory_critical': {'threshold': 95, 'severity': 'critical', 'duration': 120},
+            'buffer_cache_low': {'threshold': 90, 'severity': 'warning', 'duration': 600},
+            'page_life_low': {'threshold': 300, 'severity': 'critical', 'duration': 300},
+            'blocking_sessions': {'threshold': 0, 'severity': 'warning', 'duration': 60},
+            'high_wait_times': {'threshold': 1000, 'severity': 'warning', 'duration': 300},
+            'backup_overdue': {'threshold': 24, 'severity': 'critical', 'duration': 0}  # hours
         }
         
-        if 'alerts' not in st.session_state:
-            st.session_state.alerts = []
+        if 'enterprise_alerts' not in st.session_state:
+            st.session_state.enterprise_alerts = []
     
-    def evaluate_alerts(self, node_data: pd.DataFrame, node_name: str) -> List[Dict]:
-        """Evaluate alert conditions"""
+    def evaluate_sql_server_alerts(self, server_name: str, metrics: Dict[str, pd.DataFrame], 
+                                  health_summary: Dict) -> List[Dict]:
+        """Evaluate enterprise-grade alerts for SQL Server"""
         alerts = []
         current_time = datetime.now()
         
-        if node_data.empty:
-            return alerts
-        
-        latest_data = node_data.iloc[-1]
-        
-        # Check CPU alerts
-        if latest_data.get('cpu_usage', 0) > self.alert_rules['cpu_critical']['threshold']:
+        # System health alerts
+        if health_summary.get('status') == 'offline':
             alerts.append({
                 'timestamp': current_time,
-                'node': node_name,
+                'server': server_name,
                 'severity': 'critical',
-                'message': f"Critical CPU usage: {latest_data['cpu_usage']:.1f}%",
-                'value': latest_data['cpu_usage'],
-                'metric': 'cpu_usage'
-            })
-        elif latest_data.get('cpu_usage', 0) > self.alert_rules['cpu_high']['threshold']:
-            alerts.append({
-                'timestamp': current_time,
-                'node': node_name,
-                'severity': 'warning',
-                'message': f"High CPU usage: {latest_data['cpu_usage']:.1f}%",
-                'value': latest_data['cpu_usage'],
-                'metric': 'cpu_usage'
+                'category': 'connectivity',
+                'message': f"Server {server_name} is offline or unreachable",
+                'metric': 'connectivity',
+                'value': 0,
+                'threshold': 1,
+                'recommendation': 'Check network connectivity and SQL Server service status'
             })
         
-        # Check memory alerts
-        if latest_data.get('memory_usage', 0) > self.alert_rules['memory_critical']['threshold']:
-            alerts.append({
-                'timestamp': current_time,
-                'node': node_name,
-                'severity': 'critical',
-                'message': f"Critical memory usage: {latest_data['memory_usage']:.1f}%",
-                'value': latest_data['memory_usage'],
-                'metric': 'memory_usage'
-            })
-        elif latest_data.get('memory_usage', 0) > self.alert_rules['memory_high']['threshold']:
-            alerts.append({
-                'timestamp': current_time,
-                'node': node_name,
-                'severity': 'warning',
-                'message': f"High memory usage: {latest_data['memory_usage']:.1f}%",
-                'value': latest_data['memory_usage'],
-                'metric': 'memory_usage'
-            })
+        # Buffer cache hit ratio
+        if 'system_metrics' in metrics and not metrics['system_metrics'].empty:
+            sys_metrics = metrics['system_metrics'].iloc[0]
+            buffer_cache = sys_metrics.get('buffer_cache_hit_ratio', 100)
+            
+            if buffer_cache < self.alert_rules['buffer_cache_low']['threshold']:
+                alerts.append({
+                    'timestamp': current_time,
+                    'server': server_name,
+                    'severity': 'warning',
+                    'category': 'performance',
+                    'message': f"Low buffer cache hit ratio: {buffer_cache:.1f}%",
+                    'metric': 'buffer_cache_hit_ratio',
+                    'value': buffer_cache,
+                    'threshold': self.alert_rules['buffer_cache_low']['threshold'],
+                    'recommendation': 'Consider increasing memory allocation or optimize queries'
+                })
+            
+            # Page life expectancy
+            page_life = sys_metrics.get('page_life_expectancy', 3000)
+            if page_life < self.alert_rules['page_life_low']['threshold']:
+                alerts.append({
+                    'timestamp': current_time,
+                    'server': server_name,
+                    'severity': 'critical',
+                    'category': 'memory',
+                    'message': f"Low page life expectancy: {page_life:.0f}s",
+                    'metric': 'page_life_expectancy',
+                    'value': page_life,
+                    'threshold': self.alert_rules['page_life_low']['threshold'],
+                    'recommendation': 'Immediate memory pressure investigation required'
+                })
         
-        # Check buffer cache hit ratio
-        if latest_data.get('buffer_cache_hit_ratio', 100) < self.alert_rules['buffer_cache_low']['threshold']:
-            alerts.append({
-                'timestamp': current_time,
-                'node': node_name,
-                'severity': 'warning',
-                'message': f"Low buffer cache hit ratio: {latest_data['buffer_cache_hit_ratio']:.1f}%",
-                'value': latest_data['buffer_cache_hit_ratio'],
-                'metric': 'buffer_cache_hit_ratio'
-            })
+        # Blocking sessions
+        if 'blocking_sessions' in metrics and not metrics['blocking_sessions'].empty:
+            blocking_count = len(metrics['blocking_sessions'])
+            if blocking_count > 0:
+                alerts.append({
+                    'timestamp': current_time,
+                    'server': server_name,
+                    'severity': 'warning',
+                    'category': 'blocking',
+                    'message': f"Blocking detected: {blocking_count} blocked sessions",
+                    'metric': 'blocking_sessions',
+                    'value': blocking_count,
+                    'threshold': 0,
+                    'recommendation': 'Investigate and resolve blocking chains'
+                })
         
-        # Check page life expectancy
-        if latest_data.get('page_life_expectancy', 3000) < self.alert_rules['page_life_low']['threshold']:
-            alerts.append({
-                'timestamp': current_time,
-                'node': node_name,
-                'severity': 'critical',
-                'message': f"Low page life expectancy: {latest_data['page_life_expectancy']:.0f}s",
-                'value': latest_data['page_life_expectancy'],
-                'metric': 'page_life_expectancy'
-            })
+        # High wait times
+        if 'wait_stats' in metrics and not metrics['wait_stats'].empty:
+            top_wait = metrics['wait_stats'].iloc[0]
+            wait_time = top_wait.get('wait_time_ms', 0)
+            if wait_time > self.alert_rules['high_wait_times']['threshold']:
+                alerts.append({
+                    'timestamp': current_time,
+                    'server': server_name,
+                    'severity': 'warning',
+                    'category': 'performance',
+                    'message': f"High wait times detected: {top_wait.get('wait_type', 'Unknown')} ({wait_time:.0f}ms)",
+                    'metric': 'wait_time',
+                    'value': wait_time,
+                    'threshold': self.alert_rules['high_wait_times']['threshold'],
+                    'recommendation': f"Investigate {top_wait.get('wait_type', 'Unknown')} wait type"
+                })
+        
+        # Backup compliance
+        if 'backup_status' in metrics and not metrics['backup_status'].empty:
+            for _, backup_row in metrics['backup_status'].iterrows():
+                db_name = backup_row.get('database_name', 'Unknown')
+                last_full = backup_row.get('last_full_backup')
+                
+                if last_full and last_full != '1900-01-01':
+                    hours_since_backup = (current_time - pd.to_datetime(last_full)).total_seconds() / 3600
+                    if hours_since_backup > self.alert_rules['backup_overdue']['threshold']:
+                        alerts.append({
+                            'timestamp': current_time,
+                            'server': server_name,
+                            'severity': 'critical',
+                            'category': 'backup',
+                            'message': f"Backup overdue for {db_name}: {hours_since_backup:.1f}h since last full backup",
+                            'metric': 'backup_age',
+                            'value': hours_since_backup,
+                            'threshold': self.alert_rules['backup_overdue']['threshold'],
+                            'recommendation': 'Schedule immediate backup'
+                        })
         
         return alerts
     
     def add_alerts(self, alerts: List[Dict]):
         """Add new alerts to session state"""
-        st.session_state.alerts.extend(alerts)
-        # Keep only last 100 alerts
-        st.session_state.alerts = st.session_state.alerts[-100:]
+        st.session_state.enterprise_alerts.extend(alerts)
+        # Keep only last 200 alerts
+        st.session_state.enterprise_alerts = st.session_state.enterprise_alerts[-200:]
     
-    def get_recent_alerts(self, hours: int = 24) -> List[Dict]:
-        """Get recent alerts within specified hours"""
+    def get_alerts_by_category(self, hours: int = 24) -> Dict[str, List[Dict]]:
+        """Get recent alerts grouped by category"""
         cutoff_time = datetime.now() - timedelta(hours=hours)
-        return [alert for alert in st.session_state.alerts 
-                if alert['timestamp'] > cutoff_time]
-
-# =================== Autonomous Recovery System ===================
-class AutonomousRecovery:
-    def __init__(self, aws_connector: AWSCloudWatchConnector):
-        self.aws_connector = aws_connector
-        self.recovery_actions = {
-            'high_cpu': self.restart_sql_service,
-            'high_memory': self.clear_buffer_cache,
-            'connection_limit': self.kill_idle_connections,
-            'disk_space': self.shrink_log_files,
-            'failover_required': self.initiate_failover
-        }
-    
-    def analyze_and_recover(self, alerts: List[Dict], node_name: str) -> List[str]:
-        """Analyze alerts and suggest/execute recovery actions"""
-        recovery_actions = []
+        recent_alerts = [alert for alert in st.session_state.enterprise_alerts 
+                        if alert['timestamp'] > cutoff_time]
         
-        for alert in alerts:
-            if alert['severity'] == 'critical':
-                if alert['metric'] == 'cpu_usage' and alert['value'] > 95:
-                    action = f"Suggested: Restart SQL Server service on {node_name}"
-                    recovery_actions.append(action)
-                
-                elif alert['metric'] == 'memory_usage' and alert['value'] > 95:
-                    action = f"Suggested: Clear buffer cache on {node_name}"
-                    recovery_actions.append(action)
-                
-                elif alert['metric'] == 'page_life_expectancy' and alert['value'] < 300:
-                    action = f"Suggested: Investigate memory pressure on {node_name}"
-                    recovery_actions.append(action)
+        categories = {}
+        for alert in recent_alerts:
+            category = alert.get('category', 'other')
+            if category not in categories:
+                categories[category] = []
+            categories[category].append(alert)
         
-        return recovery_actions
-    
-    def restart_sql_service(self, node_name: str) -> bool:
-        """Restart SQL Server service (mock implementation)"""
-        # In real implementation, use AWS Systems Manager or PowerShell
-        st.info(f"🔄 Restarting SQL Server service on {node_name}")
-        return True
-    
-    def clear_buffer_cache(self, node_name: str) -> bool:
-        """Clear SQL Server buffer cache (mock implementation)"""
-        st.info(f"🗑️ Clearing buffer cache on {node_name}")
-        return True
-    
-    def kill_idle_connections(self, node_name: str) -> bool:
-        """Kill idle connections (mock implementation)"""
-        st.info(f"🔌 Killing idle connections on {node_name}")
-        return True
-    
-    def shrink_log_files(self, node_name: str) -> bool:
-        """Shrink transaction log files (mock implementation)"""
-        st.info(f"📦 Shrinking log files on {node_name}")
-        return True
-    
-    def initiate_failover(self, from_node: str, to_node: str) -> bool:
-        """Initiate Always On failover (mock implementation)"""
-        st.warning(f"⚠️ Initiating failover from {from_node} to {to_node}")
-        return True
+        return categories
 
-# =================== Main Application ===================
+# =================== Main Enterprise Application ===================
 def main():
-    st.title("🔍 SQL Server AI Monitoring & Predictive Analytics")
-    st.markdown("**Real-time monitoring, fault detection, and autonomous recovery for SQL Server Always On clusters**")
+    st.title("🏢 Enterprise SQL Server AI Monitor")
+    st.markdown("**Real-time monitoring, AI-powered analytics, and predictive maintenance for SQL Server infrastructure**")
     
     # Initialize session state
-    if 'ml_predictor' not in st.session_state:
-        st.session_state.ml_predictor = SQLServerMLPredictor()
+    if 'sql_connector' not in st.session_state:
+        st.session_state.sql_connector = None
+    
+    if 'metrics_collector' not in st.session_state:
+        st.session_state.metrics_collector = None
+    
+    if 'claude_analyzer' not in st.session_state:
+        st.session_state.claude_analyzer = None
     
     if 'alert_manager' not in st.session_state:
-        st.session_state.alert_manager = AlertManager()
-    
-    if 'data_generator' not in st.session_state:
-        st.session_state.data_generator = DataGenerator()
+        st.session_state.alert_manager = EnterpriseAlertManager()
     
     # Sidebar configuration
     with st.sidebar:
-        st.header("⚙️ Configuration")
+        st.header("🔧 Enterprise Configuration")
         
-        # AWS Configuration
-        st.subheader("AWS Settings")
-        aws_access_key = st.text_input("AWS Access Key", type="password", value="demo_key")
-        aws_secret_key = st.text_input("AWS Secret Key", type="password", value="demo_secret")
-        aws_region = st.selectbox("AWS Region", ["us-east-1", "us-west-2", "eu-west-1"], index=0)
+        # Claude AI Configuration
+        st.subheader("🤖 Claude AI Settings")
+        claude_api_key = st.text_input("Claude AI API Key", type="password", 
+                                      value="", 
+                                      help="Enter your Anthropic Claude API key")
         
-        # Cluster Configuration
-        st.subheader("Cluster Settings")
-        node_count = st.slider("Number of Nodes", 2, 5, 3)
-        refresh_interval = st.slider("Refresh Interval (seconds)", 5, 60, 30)
-        
-        # ML Configuration
-        st.subheader("ML Settings")
-        enable_auto_training = st.checkbox("Auto-train ML models", value=True)
-        enable_autonomous_recovery = st.checkbox("Enable autonomous recovery", value=False)
+        if claude_api_key:
+            if 'claude_analyzer' not in st.session_state or st.session_state.claude_analyzer is None:
+                st.session_state.claude_analyzer = ClaudeAIAnalyzer(claude_api_key)
+            
+            if st.session_state.claude_analyzer.enabled:
+                st.success("✅ Claude AI Connected")
+            else:
+                st.error("❌ Claude AI Connection Failed")
+        else:
+            st.warning("⚠️ Claude AI not configured")
         
         st.markdown("---")
-        st.markdown("**Data Source**: Demo mode using synthetic data")
-        st.markdown("**Status**: ✅ Connected")
+        
+        # SQL Server Configuration
+        st.subheader("🗄️ SQL Server Configuration")
+        
+        # Configuration for 3 SQL Servers
+        server_configs = []
+        
+        for i in range(1, 4):
+            with st.expander(f"SQL Server {i} Configuration"):
+                server_name = st.text_input(f"Server {i} Name", value=f"SQL-Server-{i}", key=f"name_{i}")
+                server_ip = st.text_input(f"Server {i} IP/FQDN", value="", key=f"ip_{i}")
+                server_port = st.text_input(f"Server {i} Port", value="1433", key=f"port_{i}")
+                database = st.text_input(f"Database", value="master", key=f"db_{i}")
+                username = st.text_input(f"Username", value="sa", key=f"user_{i}")
+                password = st.text_input(f"Password", type="password", value="", key=f"pass_{i}")
+                
+                if server_ip and password:
+                    server_configs.append({
+                        'name': server_name,
+                        'server': f"{server_ip},{server_port}",
+                        'database': database,
+                        'username': username,
+                        'password': password
+                    })
+        
+        # Initialize SQL connector if configurations are provided
+        if server_configs and len(server_configs) > 0:
+            if st.button("🔌 Test Connections"):
+                st.session_state.sql_connector = SQLServerConnector(server_configs)
+                st.session_state.metrics_collector = SQLServerMetricsCollector(st.session_state.sql_connector)
+                
+                # Test all connections
+                for config in server_configs:
+                    if st.session_state.sql_connector.test_connection(config):
+                        st.success(f"✅ {config['name']} connected")
+                    else:
+                        st.error(f"❌ {config['name']} failed")
+            
+            if st.session_state.sql_connector is None:
+                st.session_state.sql_connector = SQLServerConnector(server_configs)
+                st.session_state.metrics_collector = SQLServerMetricsCollector(st.session_state.sql_connector)
+        
+        st.markdown("---")
+        
+        # Monitoring settings
+        st.subheader("📊 Monitoring Settings")
+        refresh_interval = st.slider("Refresh Interval (seconds)", 10, 300, 60)
+        enable_ai_analysis = st.checkbox("Enable AI Analysis", value=True)
+        enable_predictive_alerts = st.checkbox("Enable Predictive Alerts", value=True)
+        
+        st.markdown("---")
+        
+        # Connection status
+        st.subheader("🔗 Connection Status")
+        if st.session_state.sql_connector:
+            st.success("SQL Connectors Ready")
+        else:
+            st.warning("Configure SQL Servers")
+        
+        if st.session_state.claude_analyzer and st.session_state.claude_analyzer.enabled:
+            st.success("Claude AI Ready")
+        else:
+            st.warning("Configure Claude AI")
     
-    # Initialize AWS connector (demo mode)
-    try:
-        aws_connector = AWSCloudWatchConnector(aws_access_key, aws_secret_key, aws_region)
-        recovery_system = AutonomousRecovery(aws_connector)
-    except:
-        st.warning("Using demo mode - AWS connector not available")
-        aws_connector = None
-        recovery_system = None
+    # Check if systems are configured
+    if not st.session_state.sql_connector:
+        st.error("🚫 Please configure SQL Server connections in the sidebar")
+        st.info("👈 Use the sidebar to configure your 3 SQL Server instances")
+        return
     
     # Main tabs
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🏠 Dashboard", 
-        "🔮 Predictions", 
+        "🤖 AI Insights", 
         "🚨 Alerts", 
+        "📊 Performance",
         "🔧 Maintenance",
-        "📊 Analytics"
+        "📈 Analytics"
     ])
     
-    # Generate real-time data
-    nodes_data = st.session_state.data_generator.generate_realtime_metrics(node_count)
+    # Collect metrics from all servers
+    all_server_metrics = {}
+    all_health_summaries = {}
     
-    # Train ML models if enabled
-    if enable_auto_training and not st.session_state.ml_predictor.is_trained:
-        with st.spinner("Training ML models..."):
-            historical_data = st.session_state.data_generator.generate_historical_data()
-            st.session_state.ml_predictor.train_models(historical_data)
+    for config in st.session_state.sql_connector.server_configs:
+        server_name = config['name']
+        
+        # Collect metrics
+        server_metrics = st.session_state.metrics_collector.collect_all_metrics(server_name)
+        all_server_metrics[server_name] = server_metrics
+        
+        # Get health summary
+        health_summary = st.session_state.metrics_collector.get_health_summary(server_name)
+        all_health_summaries[server_name] = health_summary
+        
+        # Evaluate alerts
+        alerts = st.session_state.alert_manager.evaluate_sql_server_alerts(
+            server_name, server_metrics, health_summary
+        )
+        if alerts:
+            st.session_state.alert_manager.add_alerts(alerts)
     
     # =================== Dashboard Tab ===================
     with tab1:
-        st.header("📊 Real-time Dashboard")
+        st.header("🏢 Enterprise SQL Server Dashboard")
         
-        # Key metrics overview
+        # Overall cluster status
+        st.subheader("🌐 Cluster Overview")
+        
+        online_servers = sum(1 for h in all_health_summaries.values() if h.get('status') == 'online')
+        total_servers = len(all_health_summaries)
+        
         col1, col2, col3, col4 = st.columns(4)
         
-        # Calculate cluster-wide metrics
-        total_cpu = np.mean([data['cpu_usage'].iloc[-1] for data in nodes_data.values()])
-        total_memory = np.mean([data['memory_usage'].iloc[-1] for data in nodes_data.values()])
-        total_connections = sum([data['connections'].iloc[-1] for data in nodes_data.values()])
-        avg_buffer_cache = np.mean([data['buffer_cache_hit_ratio'].iloc[-1] for data in nodes_data.values()])
-        
         with col1:
-            st.metric("Cluster CPU Usage", f"{total_cpu:.1f}%", 
-                     delta=f"{np.random.uniform(-2, 2):.1f}%")
+            st.metric("Online Servers", f"{online_servers}/{total_servers}", 
+                     delta="All systems operational" if online_servers == total_servers else "Issues detected")
         
         with col2:
-            st.metric("Cluster Memory Usage", f"{total_memory:.1f}%", 
-                     delta=f"{np.random.uniform(-1, 3):.1f}%")
+            total_databases = sum(h.get('online_databases', 0) for h in all_health_summaries.values() if h.get('status') == 'online')
+            st.metric("Total Databases", total_databases)
         
         with col3:
-            st.metric("Total Connections", f"{total_connections:.0f}", 
-                     delta=f"{np.random.randint(-5, 10)}")
+            total_sessions = sum(h.get('user_sessions', 0) for h in all_health_summaries.values() if h.get('status') == 'online')
+            st.metric("Active Sessions", total_sessions)
         
         with col4:
-            st.metric("Avg Buffer Cache Hit Ratio", f"{avg_buffer_cache:.1f}%", 
-                     delta=f"{np.random.uniform(-0.5, 0.5):.2f}%")
+            recent_alerts = len(st.session_state.alert_manager.get_alerts_by_category(1))
+            alert_color = "🔴" if recent_alerts > 5 else "🟡" if recent_alerts > 0 else "🟢"
+            st.metric(f"Alerts (1h) {alert_color}", recent_alerts)
         
         st.markdown("---")
         
-        # Per-node monitoring
-        for node_name, node_data in nodes_data.items():
-            with st.expander(f"📈 {node_name} Metrics", expanded=True):
+        # Individual server status
+        for server_name, health in all_health_summaries.items():
+            if health.get('status') == 'online':
+                st.markdown(f'<div class="server-status-online">🟢 <strong>{server_name}</strong> - Online</div>', 
+                           unsafe_allow_html=True)
                 
-                # Node status indicators
-                col1, col2, col3 = st.columns(3)
+                col1, col2, col3, col4 = st.columns(4)
+                
                 with col1:
-                    cpu_val = node_data['cpu_usage'].iloc[-1]
-                    cpu_color = "🔴" if cpu_val > 80 else "🟡" if cpu_val > 60 else "🟢"
-                    st.metric(f"CPU Usage {cpu_color}", f"{cpu_val:.1f}%")
+                    st.write(f"**Version:** {health.get('product_version', 'Unknown')[:10]}")
                 
                 with col2:
-                    mem_val = node_data['memory_usage'].iloc[-1]
-                    mem_color = "🔴" if mem_val > 85 else "🟡" if mem_val > 70 else "🟢"
-                    st.metric(f"Memory Usage {mem_color}", f"{mem_val:.1f}%")
+                    st.write(f"**Edition:** {health.get('edition', 'Unknown')[:20]}")
                 
                 with col3:
-                    conn_val = node_data['connections'].iloc[-1]
-                    conn_color = "🔴" if conn_val > 150 else "🟡" if conn_val > 100 else "🟢"
-                    st.metric(f"Connections {conn_color}", f"{conn_val:.0f}")
+                    st.write(f"**Databases:** {health.get('online_databases', 0)}")
                 
-                # Real-time charts
-                fig = make_subplots(
-                    rows=2, cols=2,
-                    subplot_titles=('CPU & Memory Usage', 'Connections', 'Buffer Cache Hit Ratio', 'Page Life Expectancy'),
-                    specs=[[{"secondary_y": True}, {"secondary_y": False}],
-                           [{"secondary_y": False}, {"secondary_y": False}]]
-                )
+                with col4:
+                    st.write(f"**Sessions:** {health.get('user_sessions', 0)}")
                 
-                # CPU and Memory
-                fig.add_trace(
-                    go.Scatter(x=node_data['timestamp'], y=node_data['cpu_usage'], 
-                              name='CPU %', line=dict(color='red')),
-                    row=1, col=1
-                )
-                fig.add_trace(
-                    go.Scatter(x=node_data['timestamp'], y=node_data['memory_usage'], 
-                              name='Memory %', line=dict(color='blue')),
-                    row=1, col=1, secondary_y=True
-                )
-                
-                # Connections
-                fig.add_trace(
-                    go.Scatter(x=node_data['timestamp'], y=node_data['connections'], 
-                              name='Connections', line=dict(color='green')),
-                    row=1, col=2
-                )
-                
-                # Buffer Cache Hit Ratio
-                fig.add_trace(
-                    go.Scatter(x=node_data['timestamp'], y=node_data['buffer_cache_hit_ratio'], 
-                              name='Buffer Cache %', line=dict(color='orange')),
-                    row=2, col=1
-                )
-                
-                # Page Life Expectancy
-                fig.add_trace(
-                    go.Scatter(x=node_data['timestamp'], y=node_data['page_life_expectancy'], 
-                              name='Page Life Exp', line=dict(color='purple')),
-                    row=2, col=2
-                )
-                
-                fig.update_layout(height=400, showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Evaluate alerts for this node
-                node_alerts = st.session_state.alert_manager.evaluate_alerts(node_data, node_name)
-                if node_alerts:
-                    st.session_state.alert_manager.add_alerts(node_alerts)
+                # Server metrics
+                if server_name in all_server_metrics:
+                    metrics = all_server_metrics[server_name]
                     
-                    # Display immediate alerts
-                    for alert in node_alerts:
-                        if alert['severity'] == 'critical':
-                            st.error(f"🚨 {alert['message']}")
-                        else:
-                            st.warning(f"⚠️ {alert['message']}")
+                    # Performance metrics display
+                    if 'system_metrics' in metrics and not metrics['system_metrics'].empty:
+                        sys_metrics = metrics['system_metrics'].iloc[0]
+                        
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            buffer_cache = sys_metrics.get('buffer_cache_hit_ratio', 0)
+                            color = "🟢" if buffer_cache > 95 else "🟡" if buffer_cache > 90 else "🔴"
+                            st.metric(f"Buffer Cache {color}", f"{buffer_cache:.1f}%")
+                        
+                        with col2:
+                            page_life = sys_metrics.get('page_life_expectancy', 0)
+                            color = "🟢" if page_life > 1000 else "🟡" if page_life > 300 else "🔴"
+                            st.metric(f"Page Life Exp {color}", f"{page_life:.0f}s")
+                        
+                        with col3:
+                            if 'active_connections' in metrics and not metrics['active_connections'].empty:
+                                conn_metrics = metrics['active_connections'].iloc[0]
+                                total_conn = conn_metrics.get('total_connections', 0)
+                                color = "🟢" if total_conn < 100 else "🟡" if total_conn < 200 else "🔴"
+                                st.metric(f"Connections {color}", total_conn)
                     
-                    # Autonomous recovery
-                    if enable_autonomous_recovery and recovery_system:
-                        recovery_actions = recovery_system.analyze_and_recover(node_alerts, node_name)
-                        if recovery_actions:
-                            st.info("🤖 Autonomous Recovery Actions:")
-                            for action in recovery_actions:
-                                st.write(f"• {action}")
+                    # Wait statistics
+                    if 'wait_stats' in metrics and not metrics['wait_stats'].empty:
+                        st.write("**Top Wait Statistics:**")
+                        wait_stats = metrics['wait_stats'].head(3)
+                        for _, wait in wait_stats.iterrows():
+                            st.write(f"• {wait.get('wait_type', 'Unknown')}: {wait.get('wait_time_ms', 0):,.0f}ms")
+                    
+                    # Blocking sessions
+                    if 'blocking_sessions' in metrics and not metrics['blocking_sessions'].empty:
+                        blocking_count = len(metrics['blocking_sessions'])
+                        st.warning(f"⚠️ {blocking_count} blocking sessions detected")
+                    
+            else:
+                st.markdown(f'<div class="server-status-offline">🔴 <strong>{server_name}</strong> - Offline</div>', 
+                           unsafe_allow_html=True)
+                st.error(f"Error: {health.get('error', 'Unknown error')}")
+            
+            st.markdown("---")
     
-    # =================== Predictions Tab ===================
+    # =================== AI Insights Tab ===================
     with tab2:
-        st.header("🔮 Predictive Analytics")
+        st.header("🤖 Claude AI Insights")
         
-        if st.session_state.ml_predictor.is_trained:
+        if st.session_state.claude_analyzer and st.session_state.claude_analyzer.enabled:
             
-            # Anomaly Detection
-            st.subheader("🕵️ Anomaly Detection")
-            
-            anomaly_results = {}
-            for node_name, node_data in nodes_data.items():
-                anomaly_result = st.session_state.ml_predictor.predict_anomaly(node_data)
-                anomaly_results[node_name] = anomaly_result
-            
-            # Display anomaly results
-            cols = st.columns(len(nodes_data))
-            for i, (node_name, result) in enumerate(anomaly_results.items()):
-                with cols[i]:
-                    if result['is_anomaly']:
-                        st.error(f"🚨 {node_name}")
-                        st.write("**Status:** Anomaly Detected")
-                        st.write(f"**Confidence:** {result['confidence']:.1f}%")
-                    else:
-                        st.success(f"✅ {node_name}")
-                        st.write("**Status:** Normal")
-                        st.write(f"**Confidence:** {100 - result['confidence']:.1f}%")
+            if st.button("🔍 Generate AI Analysis", type="primary"):
+                with st.spinner("Claude AI is analyzing your SQL Server infrastructure..."):
+                    
+                    # Performance analysis
+                    analysis = st.session_state.claude_analyzer.analyze_performance_metrics(all_server_metrics)
+                    
+                    st.markdown('<div class="claude-insight">', unsafe_allow_html=True)
+                    st.subheader("📊 Performance Analysis")
+                    st.write(analysis.get('overall_health', 'Analysis not available'))
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    # Critical issues
+                    if analysis.get('critical_issues'):
+                        st.markdown('<div class="alert-critical">', unsafe_allow_html=True)
+                        st.subheader("🚨 Critical Issues")
+                        st.write(analysis.get('critical_issues'))
+                        st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    # Recommendations
+                    st.markdown('<div class="claude-insight">', unsafe_allow_html=True)
+                    st.subheader("💡 AI Recommendations")
+                    st.write(analysis.get('recommendations', 'No specific recommendations at this time'))
+                    st.markdown('</div>', unsafe_allow_html=True)
             
             st.markdown("---")
             
-            # Failure Prediction
-            st.subheader("⚠️ Failure Prediction (24-hour outlook)")
+            # Failure prediction
+            st.subheader("🔮 Predictive Analysis")
             
-            failure_results = {}
-            for node_name, node_data in nodes_data.items():
-                failure_result = st.session_state.ml_predictor.predict_failure(node_data)
-                failure_results[node_name] = failure_result
-            
-            # Create failure probability chart
-            fig = go.Figure()
-            
-            node_names = list(failure_results.keys())
-            failure_probs = [result['failure_probability'] for result in failure_results.values()]
-            risk_levels = [result['risk_level'] for result in failure_results.values()]
-            
-            colors = ['red' if level == 'Critical' else 'orange' if level == 'High' else 
-                     'yellow' if level == 'Medium' else 'green' for level in risk_levels]
-            
-            fig.add_trace(go.Bar(
-                x=node_names,
-                y=failure_probs,
-                marker_color=colors,
-                text=[f"{prob:.1f}%<br>{level}" for prob, level in zip(failure_probs, risk_levels)],
-                textposition='auto'
-            ))
-            
-            fig.update_layout(
-                title="Failure Probability by Node (Next 24 Hours)",
-                xaxis_title="Nodes",
-                yaxis_title="Failure Probability (%)",
-                height=400
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Detailed predictions
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader("📈 Performance Trends")
-                
-                # Predict future resource usage
-                for node_name, node_data in nodes_data.items():
-                    current_cpu = node_data['cpu_usage'].iloc[-1]
-                    current_memory = node_data['memory_usage'].iloc[-1]
+            if st.button("🎯 Predict Potential Failures"):
+                with st.spinner("Analyzing failure patterns..."):
+                    predictions = st.session_state.claude_analyzer.predict_failures({}, all_server_metrics)
                     
-                    # Simple trend prediction
-                    cpu_trend = np.polyfit(range(len(node_data)), node_data['cpu_usage'], 1)[0]
-                    memory_trend = np.polyfit(range(len(node_data)), node_data['memory_usage'], 1)[0]
-                    
-                    predicted_cpu = current_cpu + (cpu_trend * 60)  # 1 hour ahead
-                    predicted_memory = current_memory + (memory_trend * 60)
-                    
-                    st.write(f"**{node_name}:**")
-                    st.write(f"CPU (1h): {current_cpu:.1f}% → {predicted_cpu:.1f}% "
-                            f"({'📈' if cpu_trend > 0 else '📉'})")
-                    st.write(f"Memory (1h): {current_memory:.1f}% → {predicted_memory:.1f}% "
-                            f"({'📈' if memory_trend > 0 else '📉'})")
-                    st.write("---")
+                    st.markdown('<div class="claude-insight">', unsafe_allow_html=True)
+                    st.write(predictions.get('predictions', 'Prediction analysis not available'))
+                    st.markdown('</div>', unsafe_allow_html=True)
             
-            with col2:
-                st.subheader("🎯 Recommendations")
-                
-                # Generate recommendations based on predictions
-                recommendations = []
-                
-                for node_name, result in failure_results.items():
-                    if result['risk_level'] == 'Critical':
-                        recommendations.append(f"🚨 **{node_name}**: Immediate attention required")
-                        recommendations.append(f"   • Schedule emergency maintenance")
-                        recommendations.append(f"   • Consider failover to secondary node")
-                    elif result['risk_level'] == 'High':
-                        recommendations.append(f"⚠️ **{node_name}**: Monitor closely")
-                        recommendations.append(f"   • Schedule maintenance within 24 hours")
-                        recommendations.append(f"   • Review resource allocation")
-                    elif result['risk_level'] == 'Medium':
-                        recommendations.append(f"📊 **{node_name}**: Schedule routine maintenance")
-                
-                if not recommendations:
-                    recommendations.append("✅ All nodes operating within normal parameters")
-                
-                for rec in recommendations:
-                    st.write(rec)
+            st.markdown("---")
+            
+            # Maintenance planning
+            st.subheader("🔧 Intelligent Maintenance Planning")
+            
+            if st.button("📋 Generate Maintenance Plan"):
+                with st.spinner("Creating intelligent maintenance plan..."):
+                    recent_alerts = st.session_state.alert_manager.get_alerts_by_category(24)
+                    all_alerts = []
+                    for category_alerts in recent_alerts.values():
+                        all_alerts.extend(category_alerts)
+                    
+                    maintenance_plan = st.session_state.claude_analyzer.generate_maintenance_plan(
+                        all_server_metrics, all_alerts
+                    )
+                    
+                    st.markdown('<div class="claude-insight">', unsafe_allow_html=True)
+                    st.write(maintenance_plan)
+                    st.markdown('</div>', unsafe_allow_html=True)
         
         else:
-            st.info("🤖 ML models are training... Please wait or enable auto-training in the sidebar.")
-            if st.button("Train Models Now"):
-                with st.spinner("Training ML models..."):
-                    historical_data = st.session_state.data_generator.generate_historical_data()
-                    st.session_state.ml_predictor.train_models(historical_data)
-                    st.rerun()
+            st.warning("🔧 Claude AI not configured. Please add your API key in the sidebar to enable AI-powered insights.")
+            st.info("""
+            **Claude AI Features:**
+            - 🔍 Intelligent performance analysis
+            - 🎯 Predictive failure detection
+            - 💡 Automated recommendations
+            - 📋 Smart maintenance planning
+            - 🔮 Trend analysis and forecasting
+            """)
     
     # =================== Alerts Tab ===================
     with tab3:
-        st.header("🚨 Alert Management")
+        st.header("🚨 Enterprise Alert Management")
         
-        # Recent alerts summary
-        recent_alerts = st.session_state.alert_manager.get_recent_alerts()
+        # Alert summary
+        alert_categories = st.session_state.alert_manager.get_alerts_by_category(24)
         
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
+        
         with col1:
-            critical_count = len([a for a in recent_alerts if a['severity'] == 'critical'])
-            st.metric("Critical Alerts (24h)", critical_count)
+            critical_count = sum(len([a for a in alerts if a['severity'] == 'critical']) 
+                               for alerts in alert_categories.values())
+            st.metric("Critical Alerts (24h)", critical_count, delta="High Priority")
         
         with col2:
-            warning_count = len([a for a in recent_alerts if a['severity'] == 'warning'])
-            st.metric("Warning Alerts (24h)", warning_count)
+            warning_count = sum(len([a for a in alerts if a['severity'] == 'warning']) 
+                              for alerts in alert_categories.values())
+            st.metric("Warning Alerts (24h)", warning_count, delta="Monitor")
         
         with col3:
-            total_count = len(recent_alerts)
-            st.metric("Total Alerts (24h)", total_count)
+            total_alerts = sum(len(alerts) for alerts in alert_categories.values())
+            st.metric("Total Alerts (24h)", total_alerts)
+        
+        with col4:
+            categories_count = len(alert_categories)
+            st.metric("Alert Categories", categories_count)
         
         st.markdown("---")
         
-        # Alert timeline
-        if recent_alerts:
-            st.subheader("📈 Alert Timeline")
+        # Alerts by category
+        for category, alerts in alert_categories.items():
+            if not alerts:
+                continue
+                
+            st.subheader(f"📂 {category.title()} Alerts")
             
-            # Convert alerts to DataFrame for plotting
-            alert_df = pd.DataFrame(recent_alerts)
-            alert_df['timestamp'] = pd.to_datetime(alert_df['timestamp'])
-            
-            # Group alerts by hour
-            alert_df['hour'] = alert_df['timestamp'].dt.floor('H')
-            hourly_alerts = alert_df.groupby(['hour', 'severity']).size().reset_index(name='count')
-            
-            fig = px.bar(hourly_alerts, x='hour', y='count', color='severity',
-                        title="Alerts by Hour and Severity",
-                        color_discrete_map={'critical': 'red', 'warning': 'orange', 'info': 'blue'})
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            st.markdown("---")
-            
-            # Recent alerts list
-            st.subheader("📋 Recent Alerts")
-            
-            # Filter options
-            col1, col2 = st.columns(2)
-            with col1:
-                severity_filter = st.selectbox("Filter by Severity", 
-                                             ["All", "critical", "warning", "info"])
-            with col2:
-                time_filter = st.selectbox("Time Range", 
-                                         ["Last 1 hour", "Last 6 hours", "Last 24 hours"])
-            
-            # Apply filters
-            filtered_alerts = recent_alerts.copy()
-            
-            if severity_filter != "All":
-                filtered_alerts = [a for a in filtered_alerts if a['severity'] == severity_filter]
-            
-            time_ranges = {"Last 1 hour": 1, "Last 6 hours": 6, "Last 24 hours": 24}
-            cutoff = datetime.now() - timedelta(hours=time_ranges[time_filter])
-            filtered_alerts = [a for a in filtered_alerts if a['timestamp'] > cutoff]
-            
-            # Display alerts
-            for alert in sorted(filtered_alerts, key=lambda x: x['timestamp'], reverse=True)[:20]:
-                severity_class = f"alert-{alert['severity']}"
+            for alert in sorted(alerts, key=lambda x: x['timestamp'], reverse=True)[:10]:
                 timestamp_str = alert['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
                 
                 if alert['severity'] == 'critical':
-                    st.error(f"🚨 **{alert['node']}** - {alert['message']} ({timestamp_str})")
+                    st.markdown(f"""
+                    <div class="alert-critical">
+                        <strong>🚨 CRITICAL</strong> - {alert['server']}<br>
+                        <strong>Issue:</strong> {alert['message']}<br>
+                        <strong>Time:</strong> {timestamp_str}<br>
+                        <strong>Recommendation:</strong> {alert.get('recommendation', 'Immediate attention required')}
+                    </div>
+                    """, unsafe_allow_html=True)
+                
                 elif alert['severity'] == 'warning':
-                    st.warning(f"⚠️ **{alert['node']}** - {alert['message']} ({timestamp_str})")
+                    st.markdown(f"""
+                    <div class="alert-warning">
+                        <strong>⚠️ WARNING</strong> - {alert['server']}<br>
+                        <strong>Issue:</strong> {alert['message']}<br>
+                        <strong>Time:</strong> {timestamp_str}<br>
+                        <strong>Recommendation:</strong> {alert.get('recommendation', 'Monitor closely')}
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            st.markdown("---")
+        
+        if not alert_categories:
+            st.success("🎉 No alerts in the last 24 hours! All systems running smoothly.")
+    
+    # =================== Performance Tab ===================
+    with tab4:
+        st.header("📊 Performance Analytics")
+        
+        # Server selector
+        selected_server = st.selectbox("Select Server for Detailed Analysis", 
+                                      list(all_server_metrics.keys()))
+        
+        if selected_server and selected_server in all_server_metrics:
+            server_metrics = all_server_metrics[selected_server]
+            
+            # CPU and Memory Analysis
+            if 'cpu_utilization' in server_metrics and not server_metrics['cpu_utilization'].empty:
+                st.subheader("💻 CPU Utilization Trends")
+                
+                cpu_data = server_metrics['cpu_utilization']
+                
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=cpu_data['EventTime'],
+                    y=cpu_data['SQLProcessUtilization'],
+                    name='SQL Server CPU %',
+                    line=dict(color='blue')
+                ))
+                fig.add_trace(go.Scatter(
+                    x=cpu_data['EventTime'],
+                    y=cpu_data['OtherProcessUtilization'],
+                    name='Other Processes %',
+                    line=dict(color='orange')
+                ))
+                
+                fig.update_layout(
+                    title=f"CPU Utilization - {selected_server}",
+                    xaxis_title="Time",
+                    yaxis_title="CPU Usage %",
+                    height=400
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Memory analysis
+            if 'memory_usage' in server_metrics and not server_metrics['memory_usage'].empty:
+                st.subheader("🧠 Memory Analysis")
+                
+                memory_data = server_metrics['memory_usage'].iloc[0]
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.metric("Physical Memory (MB)", f"{memory_data.get('physical_memory_mb', 0):,.0f}")
+                    st.metric("Committed Memory (MB)", f"{memory_data.get('committed_memory_mb', 0):,.0f}")
+                
+                with col2:
+                    st.metric("Virtual Memory (MB)", f"{memory_data.get('virtual_memory_mb', 0):,.0f}")
+                    st.metric("Target Memory (MB)", f"{memory_data.get('committed_target_mb', 0):,.0f}")
+            
+            # Wait statistics analysis
+            if 'wait_stats' in server_metrics and not server_metrics['wait_stats'].empty:
+                st.subheader("⏱️ Wait Statistics Analysis")
+                
+                wait_stats = server_metrics['wait_stats'].head(10)
+                
+                fig = px.bar(
+                    wait_stats,
+                    x='wait_type',
+                    y='wait_time_ms',
+                    title=f"Top Wait Types - {selected_server}",
+                    labels={'wait_time_ms': 'Wait Time (ms)', 'wait_type': 'Wait Type'}
+                )
+                
+                fig.update_xaxes(tickangle=45)
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Disk I/O analysis
+            if 'disk_io' in server_metrics and not server_metrics['disk_io'].empty:
+                st.subheader("💾 Disk I/O Performance")
+                
+                disk_io = server_metrics['disk_io']
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    fig = px.bar(
+                        disk_io.head(10),
+                        x='database_name',
+                        y='mb_read',
+                        title="Data Read by Database (MB)"
+                    )
+                    fig.update_xaxes(tickangle=45)
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    fig = px.bar(
+                        disk_io.head(10),
+                        x='database_name',
+                        y='mb_written',
+                        title="Data Written by Database (MB)"
+                    )
+                    fig.update_xaxes(tickangle=45)
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            # Index fragmentation
+            if 'index_fragmentation' in server_metrics and not server_metrics['index_fragmentation'].empty:
+                st.subheader("🔧 Index Fragmentation Analysis")
+                
+                frag_data = server_metrics['index_fragmentation']
+                
+                if not frag_data.empty:
+                    fig = px.scatter(
+                        frag_data,
+                        x='page_count',
+                        y='avg_fragmentation_in_percent',
+                        hover_data=['schema_name', 'object_name', 'index_name'],
+                        title="Index Fragmentation vs Page Count",
+                        labels={
+                            'page_count': 'Page Count',
+                            'avg_fragmentation_in_percent': 'Fragmentation %'
+                        }
+                    )
+                    
+                    fig.add_hline(y=30, line_dash="dash", line_color="orange", 
+                                 annotation_text="Fragmentation Threshold (30%)")
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    st.write("**Most Fragmented Indexes:**")
+                    for _, idx in frag_data.head(5).iterrows():
+                        st.write(f"• {idx['schema_name']}.{idx['object_name']}.{idx['index_name']}: "
+                               f"{idx['avg_fragmentation_in_percent']:.1f}% fragmented")
                 else:
-                    st.info(f"ℹ️ **{alert['node']}** - {alert['message']} ({timestamp_str})")
-        
-        else:
-            st.success("🎉 No recent alerts! All systems are running smoothly.")
-        
-        # Alert configuration
-        st.markdown("---")
-        st.subheader("⚙️ Alert Configuration")
-        
-        with st.expander("Alert Thresholds"):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.write("**Resource Thresholds**")
-                cpu_warning = st.slider("CPU Warning (%)", 0, 100, 80)
-                cpu_critical = st.slider("CPU Critical (%)", 0, 100, 95)
-                memory_warning = st.slider("Memory Warning (%)", 0, 100, 85)
-                memory_critical = st.slider("Memory Critical (%)", 0, 100, 95)
-            
-            with col2:
-                st.write("**SQL Server Thresholds**")
-                buffer_cache_warning = st.slider("Buffer Cache Warning (%)", 0, 100, 90)
-                page_life_critical = st.slider("Page Life Critical (sec)", 0, 1000, 300)
-                connection_warning = st.slider("Connection Warning", 0, 500, 200)
-            
-            if st.button("Update Alert Thresholds"):
-                # Update alert manager thresholds
-                st.session_state.alert_manager.alert_rules.update({
-                    'cpu_high': {'threshold': cpu_warning, 'severity': 'warning'},
-                    'cpu_critical': {'threshold': cpu_critical, 'severity': 'critical'},
-                    'memory_high': {'threshold': memory_warning, 'severity': 'warning'},
-                    'memory_critical': {'threshold': memory_critical, 'severity': 'critical'},
-                    'buffer_cache_low': {'threshold': buffer_cache_warning, 'severity': 'warning'},
-                    'page_life_low': {'threshold': page_life_critical, 'severity': 'critical'},
-                    'connections_high': {'threshold': connection_warning, 'severity': 'warning'}
-                })
-                st.success("Alert thresholds updated!")
+                    st.success("✅ No highly fragmented indexes detected")
     
     # =================== Maintenance Tab ===================
-    with tab4:
-        st.header("🔧 Proactive Maintenance")
+    with tab5:
+        st.header("🔧 Proactive Maintenance Management")
+        
+        # Backup status overview
+        st.subheader("💾 Backup Compliance Dashboard")
+        
+        backup_summary = []
+        for server_name, metrics in all_server_metrics.items():
+            if 'backup_status' in metrics and not metrics['backup_status'].empty:
+                backup_data = metrics['backup_status']
+                
+                for _, backup in backup_data.iterrows():
+                    db_name = backup.get('database_name')
+                    last_full = backup.get('last_full_backup')
+                    last_log = backup.get('last_log_backup')
+                    
+                    if last_full and last_full != '1900-01-01':
+                        hours_since_full = (datetime.now() - pd.to_datetime(last_full)).total_seconds() / 3600
+                    else:
+                        hours_since_full = 999
+                    
+                    backup_summary.append({
+                        'Server': server_name,
+                        'Database': db_name,
+                        'Hours Since Full Backup': hours_since_full,
+                        'Last Full Backup': last_full,
+                        'Recovery Model': backup.get('recovery_model_desc', 'Unknown')
+                    })
+        
+        if backup_summary:
+            backup_df = pd.DataFrame(backup_summary)
+            
+            # Color-code based on backup age
+            def backup_status_color(hours):
+                if hours < 24:
+                    return "🟢"
+                elif hours < 48:
+                    return "🟡"
+                else:
+                    return "🔴"
+            
+            backup_df['Status'] = backup_df['Hours Since Full Backup'].apply(backup_status_color)
+            
+            st.dataframe(backup_df[['Server', 'Database', 'Status', 'Hours Since Full Backup', 'Recovery Model']], 
+                        use_container_width=True)
+        
+        st.markdown("---")
         
         # Maintenance recommendations
         st.subheader("📋 Maintenance Recommendations")
         
-        # Analyze current state and generate recommendations
         maintenance_tasks = []
         
-        for node_name, node_data in nodes_data.items():
-            latest_data = node_data.iloc[-1]
+        for server_name, metrics in all_server_metrics.items():
+            # Index maintenance needs
+            if 'index_fragmentation' in metrics and not metrics['index_fragmentation'].empty:
+                frag_count = len(metrics['index_fragmentation'])
+                if frag_count > 0:
+                    maintenance_tasks.append({
+                        'Server': server_name,
+                        'Priority': 'High',
+                        'Task': 'Index Maintenance',
+                        'Description': f'{frag_count} indexes require attention (>30% fragmentation)',
+                        'Estimated Time': '2-4 hours',
+                        'Impact': 'Medium'
+                    })
             
-            # Check various maintenance conditions
-            if latest_data['buffer_cache_hit_ratio'] < 95:
-                maintenance_tasks.append({
-                    'priority': 'Medium',
-                    'node': node_name,
-                    'task': 'Optimize buffer cache',
-                    'description': f"Buffer cache hit ratio is {latest_data['buffer_cache_hit_ratio']:.1f}%. Consider reviewing memory allocation.",
-                    'estimated_time': '30 minutes',
-                    'impact': 'Low'
-                })
+            # Buffer cache optimization
+            if 'system_metrics' in metrics and not metrics['system_metrics'].empty:
+                sys_metrics = metrics['system_metrics'].iloc[0]
+                buffer_cache = sys_metrics.get('buffer_cache_hit_ratio', 100)
+                
+                if buffer_cache < 95:
+                    maintenance_tasks.append({
+                        'Server': server_name,
+                        'Priority': 'Medium',
+                        'Task': 'Buffer Cache Optimization',
+                        'Description': f'Buffer cache hit ratio is {buffer_cache:.1f}%',
+                        'Estimated Time': '1-2 hours',
+                        'Impact': 'Low'
+                    })
             
-            if latest_data['page_life_expectancy'] < 1000:
-                maintenance_tasks.append({
-                    'priority': 'High',
-                    'node': node_name,
-                    'task': 'Investigate memory pressure',
-                    'description': f"Page life expectancy is {latest_data['page_life_expectancy']:.0f}s. Memory pressure detected.",
-                    'estimated_time': '1 hour',
-                    'impact': 'Medium'
-                })
-            
-            if latest_data['log_growth_rate'] > 20:
-                maintenance_tasks.append({
-                    'priority': 'Medium',
-                    'node': node_name,
-                    'task': 'Log file maintenance',
-                    'description': f"Transaction log growth rate is high ({latest_data['log_growth_rate']:.1f} MB/min).",
-                    'estimated_time': '45 minutes',
-                    'impact': 'Low'
-                })
-            
-            # Weekly maintenance tasks
-            maintenance_tasks.extend([
-                {
-                    'priority': 'Low',
-                    'node': node_name,
-                    'task': 'Index maintenance',
-                    'description': 'Rebuild fragmented indexes and update statistics',
-                    'estimated_time': '2 hours',
-                    'impact': 'Medium'
-                },
-                {
-                    'priority': 'Low',
-                    'node': node_name,
-                    'task': 'Backup verification',
-                    'description': 'Verify backup integrity and restore procedures',
-                    'estimated_time': '1 hour',
-                    'impact': 'Low'
-                }
-            ])
-        
-        # Sort by priority
-        priority_order = {'High': 1, 'Medium': 2, 'Low': 3}
-        maintenance_tasks.sort(key=lambda x: priority_order[x['priority']])
+            # Weekly maintenance
+            maintenance_tasks.append({
+                'Server': server_name,
+                'Priority': 'Low',
+                'Task': 'Statistics Update',
+                'Description': 'Update table statistics for query optimization',
+                'Estimated Time': '30-60 minutes',
+                'Impact': 'Low'
+            })
         
         # Display maintenance tasks
-        for task in maintenance_tasks[:10]:  # Show top 10 tasks
-            priority_color = {'High': '🔴', 'Medium': '🟡', 'Low': '🟢'}[task['priority']]
-            
-            with st.expander(f"{priority_color} {task['priority']} - {task['task']} ({task['node']})"):
-                col1, col2, col3 = st.columns(3)
+        if maintenance_tasks:
+            for task in maintenance_tasks:
+                priority_color = {
+                    'High': '🔴',
+                    'Medium': '🟡', 
+                    'Low': '🟢'
+                }[task['Priority']]
                 
-                with col1:
-                    st.write(f"**Estimated Time:** {task['estimated_time']}")
-                
-                with col2:
-                    st.write(f"**Impact:** {task['impact']}")
-                
-                with col3:
-                    if st.button(f"Schedule", key=f"schedule_{task['node']}_{task['task']}"):
-                        st.success(f"Maintenance scheduled for {task['node']}")
-                
-                st.write(f"**Description:** {task['description']}")
+                with st.expander(f"{priority_color} {task['Priority']} - {task['Task']} ({task['Server']})"):
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        st.write(f"**Priority:** {task['Priority']}")
+                    
+                    with col2:
+                        st.write(f"**Estimated Time:** {task['Estimated Time']}")
+                    
+                    with col3:
+                        st.write(f"**Impact:** {task['Impact']}")
+                    
+                    with col4:
+                        if st.button("Schedule", key=f"schedule_{task['Server']}_{task['Task']}"):
+                            st.success(f"✅ Scheduled: {task['Task']} for {task['Server']}")
+                    
+                    st.write(f"**Description:** {task['Description']}")
         
         st.markdown("---")
         
-        # Maintenance calendar
-        st.subheader("📅 Maintenance Calendar")
+        # Database integrity checks
+        st.subheader("🔍 Database Integrity Monitoring")
         
         col1, col2 = st.columns(2)
         
         with col1:
-            st.write("**Upcoming Scheduled Maintenance:**")
-            
-            # Mock scheduled maintenance
-            scheduled_maintenance = [
-                {"date": "2025-06-23", "task": "Index Rebuild - Node_1", "time": "02:00 AM"},
-                {"date": "2025-06-24", "task": "Statistics Update - All Nodes", "time": "01:00 AM"},
-                {"date": "2025-06-25", "task": "Log Backup Verification", "time": "03:00 AM"},
-                {"date": "2025-06-30", "task": "Monthly Health Check", "time": "02:00 AM"}
-            ]
-            
-            for maintenance in scheduled_maintenance:
-                st.write(f"📅 **{maintenance['date']}** at {maintenance['time']}")
-                st.write(f"   {maintenance['task']}")
-                st.write("---")
+            st.write("**Recommended DBCC Commands:**")
+            st.code("""
+-- Check database integrity
+DBCC CHECKDB('YourDatabase') WITH NO_INFOMSGS;
+
+-- Check allocation consistency
+DBCC CHECKALLOC('YourDatabase');
+
+-- Update statistics
+UPDATE STATISTICS YourTable;
+
+-- Rebuild indexes
+ALTER INDEX ALL ON YourTable REBUILD;
+            """, language="sql")
         
         with col2:
-            st.write("**Maintenance History:**")
+            st.write("**Automated Maintenance Scripts:**")
+            if st.button("📥 Download Maintenance Scripts"):
+                st.info("Maintenance scripts would be generated and downloaded here")
             
-            # Mock maintenance history
-            maintenance_history = [
-                {"date": "2025-06-20", "task": "Emergency failover test", "status": "Completed", "duration": "45 min"},
-                {"date": "2025-06-18", "task": "Buffer cache optimization", "status": "Completed", "duration": "30 min"},
-                {"date": "2025-06-15", "task": "Index maintenance", "status": "Completed", "duration": "2h 15min"},
-                {"date": "2025-06-12", "task": "Security patches", "status": "Completed", "duration": "1h 30min"}
-            ]
-            
-            for history in maintenance_history:
-                status_icon = "✅" if history['status'] == 'Completed' else "⏳"
-                st.write(f"{status_icon} **{history['date']}** ({history['duration']})")
-                st.write(f"   {history['task']}")
-                st.write("---")
-        
-        # Capacity planning
-        st.markdown("---")
-        st.subheader("📊 Capacity Planning")
-        
-        # Generate capacity forecasts
-        forecast_data = []
-        for node_name, node_data in nodes_data.items():
-            # Simple linear extrapolation for demo
-            cpu_trend = np.polyfit(range(len(node_data)), node_data['cpu_usage'], 1)[0]
-            memory_trend = np.polyfit(range(len(node_data)), node_data['memory_usage'], 1)[0]
-            
-            current_cpu = node_data['cpu_usage'].iloc[-1]
-            current_memory = node_data['memory_usage'].iloc[-1]
-            
-            # Forecast 30, 60, 90 days
-            for days in [30, 60, 90]:
-                forecast_cpu = current_cpu + (cpu_trend * days * 24)  # Daily trend
-                forecast_memory = current_memory + (memory_trend * days * 24)
-                
-                forecast_data.append({
-                    'Node': node_name,
-                    'Days': days,
-                    'CPU_Forecast': max(0, min(100, forecast_cpu)),
-                    'Memory_Forecast': max(0, min(100, forecast_memory))
-                })
-        
-        forecast_df = pd.DataFrame(forecast_data)
-        
-        # Capacity forecast chart
-        fig = make_subplots(
-            rows=1, cols=2,
-            subplot_titles=('CPU Usage Forecast', 'Memory Usage Forecast')
-        )
-        
-        for node in forecast_df['Node'].unique():
-            node_forecast = forecast_df[forecast_df['Node'] == node]
-            
-            fig.add_trace(
-                go.Scatter(x=node_forecast['Days'], y=node_forecast['CPU_Forecast'],
-                          name=f'{node} CPU', mode='lines+markers'),
-                row=1, col=1
-            )
-            
-            fig.add_trace(
-                go.Scatter(x=node_forecast['Days'], y=node_forecast['Memory_Forecast'],
-                          name=f'{node} Memory', mode='lines+markers'),
-                row=1, col=2
-            )
-        
-        # Add capacity thresholds
-        fig.add_hline(y=80, line_dash="dash", line_color="orange", 
-                     annotation_text="Warning Threshold", row=1, col=1)
-        fig.add_hline(y=80, line_dash="dash", line_color="orange", row=1, col=2)
-        
-        fig.update_layout(height=400, title_text="Resource Usage Forecast")
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Capacity recommendations
-        st.subheader("💡 Capacity Recommendations")
-        
-        capacity_alerts = []
-        for _, row in forecast_df.iterrows():
-            if row['CPU_Forecast'] > 80:
-                capacity_alerts.append(
-                    f"⚠️ **{row['Node']}**: CPU usage may exceed 80% in {row['Days']} days"
-                )
-            if row['Memory_Forecast'] > 80:
-                capacity_alerts.append(
-                    f"⚠️ **{row['Node']}**: Memory usage may exceed 80% in {row['Days']} days"
-                )
-        
-        if capacity_alerts:
-            for alert in capacity_alerts[:5]:  # Show top 5
-                st.warning(alert)
-        else:
-            st.success("✅ No capacity concerns identified in the next 90 days")
+            st.write("**Maintenance Schedule:**")
+            st.write("• Daily: Transaction log backups")
+            st.write("• Weekly: Full database backups")
+            st.write("• Weekly: Index maintenance")
+            st.write("• Monthly: Statistics updates")
+            st.write("• Quarterly: DBCC CHECKDB")
     
     # =================== Analytics Tab ===================
-    with tab5:
-        st.header("📊 Historical Analytics")
+    with tab6:
+        st.header("📈 Historical Analytics & Trends")
         
-        # Generate historical data for analysis
-        historical_data = st.session_state.data_generator.generate_historical_data(30)
+        st.subheader("📊 Performance Trends Analysis")
         
-        # Time range selector
-        col1, col2 = st.columns(2)
-        with col1:
-            start_date = st.date_input("Start Date", 
-                                     value=datetime.now().date() - timedelta(days=7))
-        with col2:
-            end_date = st.date_input("End Date", 
-                                   value=datetime.now().date())
+        # This would typically show historical data analysis
+        # For now, showing current snapshot analysis
         
-        # Filter data by date range
-        start_datetime = datetime.combine(start_date, datetime.min.time())
-        end_datetime = datetime.combine(end_date, datetime.max.time())
+        # Performance metrics summary across all servers
+        performance_summary = []
         
-        filtered_data = historical_data[
-            (historical_data['timestamp'] >= start_datetime) & 
-            (historical_data['timestamp'] <= end_datetime)
-        ]
-        
-        if filtered_data.empty:
-            st.warning("No data available for the selected date range")
-            return
-        
-        # Performance trends
-        st.subheader("📈 Performance Trends")
-        
-        # Resample data for better visualization
-        filtered_data.set_index('timestamp', inplace=True)
-        daily_stats = filtered_data.resample('D').agg({
-            'cpu_usage': ['mean', 'max'],
-            'memory_usage': ['mean', 'max'],
-            'connections': ['mean', 'max'],
-            'buffer_cache_hit_ratio': 'mean',
-            'page_life_expectancy': 'mean'
-        }).reset_index()
-        
-        # Flatten column names
-        daily_stats.columns = ['timestamp'] + [f"{col[0]}_{col[1]}" if col[1] else col[0] 
-                                              for col in daily_stats.columns[1:]]
-        
-        # Create trend charts
-        fig = make_subplots(
-            rows=2, cols=2,
-            subplot_titles=('CPU Usage Trends', 'Memory Usage Trends', 
-                          'Connection Trends', 'Buffer Cache Performance'),
-            specs=[[{"secondary_y": True}, {"secondary_y": True}],
-                   [{"secondary_y": False}, {"secondary_y": False}]]
-        )
-        
-        # CPU trends
-        fig.add_trace(
-            go.Scatter(x=daily_stats['timestamp'], y=daily_stats['cpu_usage_mean'],
-                      name='CPU Avg', line=dict(color='blue')),
-            row=1, col=1
-        )
-        fig.add_trace(
-            go.Scatter(x=daily_stats['timestamp'], y=daily_stats['cpu_usage_max'],
-                      name='CPU Max', line=dict(color='red', dash='dash')),
-            row=1, col=1, secondary_y=True
-        )
-        
-        # Memory trends
-        fig.add_trace(
-            go.Scatter(x=daily_stats['timestamp'], y=daily_stats['memory_usage_mean'],
-                      name='Memory Avg', line=dict(color='green')),
-            row=1, col=2
-        )
-        fig.add_trace(
-            go.Scatter(x=daily_stats['timestamp'], y=daily_stats['memory_usage_max'],
-                      name='Memory Max', line=dict(color='orange', dash='dash')),
-            row=1, col=2, secondary_y=True
-        )
-        
-        # Connection trends
-        fig.add_trace(
-            go.Scatter(x=daily_stats['timestamp'], y=daily_stats['connections_mean'],
-                      name='Connections Avg', line=dict(color='purple')),
-            row=2, col=1
-        )
-        
-        # Buffer cache trends
-        fig.add_trace(
-            go.Scatter(x=daily_stats['timestamp'], y=daily_stats['buffer_cache_hit_ratio_mean'],
-                      name='Buffer Cache %', line=dict(color='brown')),
-            row=2, col=2
-        )
-        
-        fig.update_layout(height=600, showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-        
-        st.markdown("---")
-        
-        # Performance summary statistics
-        st.subheader("📋 Performance Summary")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Avg CPU Usage", f"{filtered_data['cpu_usage'].mean():.1f}%",
-                     delta=f"{filtered_data['cpu_usage'].std():.1f}% std")
-            st.metric("Max CPU Usage", f"{filtered_data['cpu_usage'].max():.1f}%")
-        
-        with col2:
-            st.metric("Avg Memory Usage", f"{filtered_data['memory_usage'].mean():.1f}%",
-                     delta=f"{filtered_data['memory_usage'].std():.1f}% std")
-            st.metric("Max Memory Usage", f"{filtered_data['memory_usage'].max():.1f}%")
-        
-        with col3:
-            st.metric("Avg Connections", f"{filtered_data['connections'].mean():.0f}",
-                     delta=f"{filtered_data['connections'].std():.0f} std")
-            st.metric("Max Connections", f"{filtered_data['connections'].max():.0f}")
-        
-        with col4:
-            st.metric("Avg Buffer Cache", f"{filtered_data['buffer_cache_hit_ratio'].mean():.2f}%")
-            st.metric("Min Buffer Cache", f"{filtered_data['buffer_cache_hit_ratio'].min():.2f}%")
-        
-        # Pattern analysis
-        st.markdown("---")
-        st.subheader("🔍 Pattern Analysis")
-        
-        # Hourly patterns
-        filtered_data['hour'] = filtered_data.index.hour
-        filtered_data['day_of_week'] = filtered_data.index.dayofweek
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Hourly CPU pattern
-            hourly_cpu = filtered_data.groupby('hour')['cpu_usage'].mean()
+        for server_name, metrics in all_server_metrics.items():
+            server_health = all_health_summaries.get(server_name, {})
             
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=hourly_cpu.index,
-                y=hourly_cpu.values,
-                mode='lines+markers',
-                name='Hourly CPU Pattern',
-                line=dict(color='blue', width=3)
-            ))
-            
-            fig.update_layout(
-                title="Average CPU Usage by Hour",
-                xaxis_title="Hour of Day",
-                yaxis_title="CPU Usage (%)",
-                height=300
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            # Daily pattern
-            day_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-            daily_cpu = filtered_data.groupby('day_of_week')['cpu_usage'].mean()
-            
-            fig = go.Figure()
-            fig.add_trace(go.Bar(
-                x=[day_names[i] for i in daily_cpu.index],
-                y=daily_cpu.values,
-                marker_color='lightblue',
-                name='Daily CPU Pattern'
-            ))
-            
-            fig.update_layout(
-                title="Average CPU Usage by Day of Week",
-                xaxis_title="Day of Week",
-                yaxis_title="CPU Usage (%)",
-                height=300
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-        
-        # Correlation analysis
-        st.markdown("---")
-        st.subheader("🔗 Correlation Analysis")
-        
-        # Calculate correlations
-        correlation_metrics = ['cpu_usage', 'memory_usage', 'connections', 
-                             'buffer_cache_hit_ratio', 'page_life_expectancy']
-        
-        available_metrics = [metric for metric in correlation_metrics 
-                           if metric in filtered_data.columns]
-        
-        if len(available_metrics) > 1:
-            correlation_matrix = filtered_data[available_metrics].corr()
-            
-            fig = go.Figure(data=go.Heatmap(
-                z=correlation_matrix.values,
-                x=correlation_matrix.columns,
-                y=correlation_matrix.columns,
-                colorscale='RdBu',
-                zmid=0,
-                text=correlation_matrix.round(2).values,
-                texttemplate="%{text}",
-                textfont={"size": 12},
-                hoverongaps=False
-            ))
-            
-            fig.update_layout(
-                title="Metric Correlation Matrix",
-                height=400
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Insights from correlation
-            st.subheader("💡 Correlation Insights")
-            
-            insights = []
-            
-            # Check for high correlations
-            for i in range(len(correlation_matrix.columns)):
-                for j in range(i+1, len(correlation_matrix.columns)):
-                    corr_value = correlation_matrix.iloc[i, j]
-                    metric1 = correlation_matrix.columns[i]
-                    metric2 = correlation_matrix.columns[j]
-                    
-                    if abs(corr_value) > 0.7:
-                        relationship = "positively" if corr_value > 0 else "negatively"
-                        insights.append(
-                            f"**{metric1}** and **{metric2}** are strongly {relationship} "
-                            f"correlated (r={corr_value:.2f})"
-                        )
-            
-            if insights:
-                for insight in insights:
-                    st.write(f"• {insight}")
+            if server_health.get('status') == 'online':
+                summary = {
+                    'Server': server_name,
+                    'Status': '🟢 Online',
+                    'Databases': server_health.get('online_databases', 0),
+                    'Sessions': server_health.get('user_sessions', 0)
+                }
+                
+                # Add performance metrics
+                if 'system_metrics' in metrics and not metrics['system_metrics'].empty:
+                    sys_metrics = metrics['system_metrics'].iloc[0]
+                    summary['Buffer Cache Hit %'] = sys_metrics.get('buffer_cache_hit_ratio', 0)
+                    summary['Page Life Expectancy'] = sys_metrics.get('page_life_expectancy', 0)
+                
+                if 'active_connections' in metrics and not metrics['active_connections'].empty:
+                    conn_metrics = metrics['active_connections'].iloc[0]
+                    summary['Total Connections'] = conn_metrics.get('total_connections', 0)
+                    summary['Running Sessions'] = conn_metrics.get('running_sessions', 0)
+                
+                performance_summary.append(summary)
             else:
-                st.write("• No strong correlations detected between metrics")
+                performance_summary.append({
+                    'Server': server_name,
+                    'Status': '🔴 Offline',
+                    'Databases': 0,
+                    'Sessions': 0,
+                    'Buffer Cache Hit %': 0,
+                    'Page Life Expectancy': 0,
+                    'Total Connections': 0,
+                    'Running Sessions': 0
+                })
+        
+        if performance_summary:
+            performance_df = pd.DataFrame(performance_summary)
+            st.dataframe(performance_df, use_container_width=True)
+            
+            # Performance comparison charts
+            st.subheader("📊 Performance Comparison")
+            
+            online_servers = performance_df[performance_df['Status'] == '🟢 Online']
+            
+            if not online_servers.empty:
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    fig = px.bar(
+                        online_servers,
+                        x='Server',
+                        y='Buffer Cache Hit %',
+                        title="Buffer Cache Hit Ratio Comparison",
+                        color='Buffer Cache Hit %',
+                        color_continuous_scale='RdYlGn'
+                    )
+                    fig.add_hline(y=95, line_dash="dash", line_color="orange", 
+                                 annotation_text="Target: 95%")
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    fig = px.bar(
+                        online_servers,
+                        x='Server',
+                        y='Total Connections',
+                        title="Connection Count Comparison",
+                        color='Total Connections',
+                        color_continuous_scale='Blues'
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+        
+        # Alert trends
+        st.subheader("🚨 Alert Trends")
+        
+        alert_categories = st.session_state.alert_manager.get_alerts_by_category(168)  # Last week
+        
+        if alert_categories:
+            # Create alert trend data
+            alert_trend_data = []
+            
+            for category, alerts in alert_categories.items():
+                for alert in alerts:
+                    alert_trend_data.append({
+                        'Date': alert['timestamp'].date(),
+                        'Hour': alert['timestamp'].hour,
+                        'Category': category,
+                        'Severity': alert['severity'],
+                        'Server': alert['server']
+                    })
+            
+            if alert_trend_data:
+                alert_df = pd.DataFrame(alert_trend_data)
+                
+                # Daily alert counts
+                daily_alerts = alert_df.groupby(['Date', 'Severity']).size().reset_index(name='Count')
+                
+                fig = px.line(
+                    daily_alerts,
+                    x='Date',
+                    y='Count',
+                    color='Severity',
+                    title="Daily Alert Trends",
+                    color_discrete_map={'critical': 'red', 'warning': 'orange', 'info': 'blue'}
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.success("📈 No significant alert trends detected - systems running smoothly!")
     
     # Auto-refresh functionality
     if 'last_refresh' not in st.session_state:
@@ -1414,12 +1551,12 @@ def main():
         st.session_state.last_refresh = datetime.now()
         st.rerun()
     
-    # Display refresh status
+    # Status bar
     st.sidebar.markdown("---")
     st.sidebar.write(f"🔄 Last refresh: {st.session_state.last_refresh.strftime('%H:%M:%S')}")
-    st.sidebar.write(f"⏱️ Next refresh in: {refresh_interval - time_since_refresh}s")
+    st.sidebar.write(f"⏱️ Next refresh: {refresh_interval - time_since_refresh}s")
     
-    if st.sidebar.button("🔄 Refresh Now"):
+    if st.sidebar.button("🔄 Refresh Now", type="primary"):
         st.rerun()
 
 if __name__ == "__main__":
