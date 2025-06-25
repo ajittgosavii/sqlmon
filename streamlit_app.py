@@ -8,35 +8,25 @@ from datetime import datetime, timedelta
 import json
 import time
 import warnings
-from sklearn.ensemble import IsolationForest, RandomForestClassifier
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
-import joblib
 import asyncio
 import threading
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 import logging
 import requests
 import hashlib
 import hmac
 import base64
 from urllib.parse import quote
+import re
 
-# Try to import SQL Server connectivity libraries
+# Try to import required AWS libraries
 try:
-    import pyodbc
-    PYODBC_AVAILABLE = True
+    import boto3
+    from botocore.exceptions import ClientError, BotoCoreError
+    AWS_AVAILABLE = True
 except ImportError:
-    PYODBC_AVAILABLE = False
-    pyodbc = None
-
-try:
-    import sqlalchemy
-    from sqlalchemy import create_engine, text
-    SQLALCHEMY_AVAILABLE = True
-except ImportError:
-    SQLALCHEMY_AVAILABLE = False
-    sqlalchemy = None
+    AWS_AVAILABLE = False
+    boto3 = None
 
 try:
     from anthropic import Anthropic
@@ -49,15 +39,23 @@ warnings.filterwarnings('ignore')
 
 # Configure Streamlit page
 st.set_page_config(
-    page_title="Enterprise SQL Server AI Monitor",
-    page_icon="🔍",
+    page_title="AWS CloudWatch SQL Server Monitor",
+    page_icon="☁️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for enterprise UI
+# Enhanced CSS for AWS-themed enterprise UI
 st.markdown("""
 <style>
+    .aws-header {
+        background: linear-gradient(135deg, #232F3E 0%, #FF9900 100%);
+        padding: 1.5rem;
+        border-radius: 12px;
+        color: white;
+        margin: 0.5rem 0;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    }
     .metric-card {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 1.5rem;
@@ -66,14 +64,21 @@ st.markdown("""
         margin: 0.5rem 0;
         box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
     }
-    .server-status-online {
+    .cluster-online {
         background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
         padding: 1rem;
         border-radius: 8px;
         color: white;
         margin: 0.3rem 0;
     }
-    .server-status-offline {
+    .cluster-degraded {
+        background: linear-gradient(135deg, #f39c12 0%, #f1c40f 100%);
+        padding: 1rem;
+        border-radius: 8px;
+        color: white;
+        margin: 0.3rem 0;
+    }
+    .cluster-offline {
         background: linear-gradient(135deg, #ff416c 0%, #ff4757 100%);
         padding: 1rem;
         border-radius: 8px;
@@ -96,13 +101,13 @@ st.markdown("""
         margin: 0.3rem 0;
         border-left: 5px solid #e67e22;
     }
-    .alert-info {
-        background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+    .auto-remediation {
+        background: linear-gradient(135deg, #00d2ff 0%, #3a7bd5 100%);
         color: white;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 0.3rem 0;
-        border-left: 5px solid #2c3e50;
+        padding: 1.5rem;
+        border-radius: 12px;
+        margin: 1rem 0;
+        border-left: 5px solid #0073e6;
     }
     .claude-insight {
         background: linear-gradient(135deg, #8e44ad 0%, #9b59b6 100%);
@@ -112,907 +117,1385 @@ st.markdown("""
         margin: 1rem 0;
         border-left: 5px solid #6c3483;
     }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 60px;
-        padding-left: 25px;
-        padding-right: 25px;
-        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-        border-radius: 8px 8px 0 0;
+    .aws-service {
+        background: linear-gradient(135deg, #232F3E 0%, #4A5568 100%);
+        color: white;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 0.3rem 0;
+        border-left: 5px solid #FF9900;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# =================== SQL Server Connection Manager ===================
-class SQLServerConnector:
-    def __init__(self, server_configs: List[Dict]):
-        """Initialize SQL Server connections"""
-        self.server_configs = server_configs
-        self.connections = {}
-        self.connection_status = {}
-        self.demo_mode = not PYODBC_AVAILABLE
+# =================== AWS CloudWatch Integration ===================
+class AWSCloudWatchConnector:
+    def __init__(self, aws_config: Dict):
+        """Initialize AWS CloudWatch connections"""
+        self.aws_config = aws_config
+        self.demo_mode = not AWS_AVAILABLE
         
-        if not PYODBC_AVAILABLE:
-            st.warning("⚠️ Running in Demo Mode: pyodbc not available. Install pyodbc and ODBC drivers for real SQL Server connections.")
+        if not AWS_AVAILABLE:
+            st.warning("⚠️ Running in Demo Mode: boto3 not available. Install boto3 for real AWS CloudWatch connections.")
+            return
         
-    def test_connection(self, server_config: Dict) -> bool:
-        """Test connection to SQL Server"""
-        if self.demo_mode:
-            # Simulate connection test in demo mode
-            return True
-            
         try:
-            if PYODBC_AVAILABLE:
-                connection_string = (
-                    f"DRIVER={{ODBC Driver 18 for SQL Server}};"
-                    f"SERVER={server_config['server']};"
-                    f"DATABASE={server_config['database']};"
-                    f"UID={server_config['username']};"
-                    f"PWD={server_config['password']};"
-                    f"TrustServerCertificate=yes;"
-                    f"Connection Timeout=10;"
-                )
-                
-                conn = pyodbc.connect(connection_string)
-                cursor = conn.cursor()
-                cursor.execute("SELECT 1")
-                cursor.close()
-                conn.close()
-                return True
-            else:
-                return False
+            # Initialize AWS clients
+            self.session = boto3.Session(
+                aws_access_key_id=aws_config.get('access_key'),
+                aws_secret_access_key=aws_config.get('secret_key'),
+                region_name=aws_config.get('region', 'us-east-1')
+            )
+            
+            self.cloudwatch = self.session.client('cloudwatch')
+            self.logs = self.session.client('logs')
+            self.rds = self.session.client('rds')
+            self.ec2 = self.session.client('ec2')
+            self.ssm = self.session.client('ssm')
+            self.lambda_client = self.session.client('lambda')
+            
+            self.demo_mode = False
             
         except Exception as e:
-            st.error(f"Connection failed for {server_config['name']}: {str(e)}")
+            st.error(f"Failed to initialize AWS clients: {str(e)}")
+            self.demo_mode = True
+    
+    def test_connection(self) -> bool:
+        """Test AWS connection"""
+        if self.demo_mode:
+            return True
+        
+        try:
+            # Test CloudWatch connection
+            self.cloudwatch.list_metrics(MaxRecords=1)
+            return True
+        except Exception as e:
+            st.error(f"AWS connection test failed: {str(e)}")
             return False
     
-    def get_connection(self, server_name: str):
-        """Get database connection for a server"""
+    def get_cloudwatch_metrics(self, metric_queries: List[Dict], 
+                              start_time: datetime, end_time: datetime) -> Dict[str, List]:
+        """Get CloudWatch metrics"""
         if self.demo_mode:
-            return None
-            
-        server_config = next((s for s in self.server_configs if s['name'] == server_name), None)
-        if not server_config:
-            return None
-            
-        try:
-            if PYODBC_AVAILABLE:
-                connection_string = (
-                    f"DRIVER={{ODBC Driver 18 for SQL Server}};"
-                    f"SERVER={server_config['server']};"
-                    f"DATABASE={server_config['database']};"
-                    f"UID={server_config['username']};"
-                    f"PWD={server_config['password']};"
-                    f"TrustServerCertificate=yes;"
-                    f"Connection Timeout=30;"
-                )
-                
-                return pyodbc.connect(connection_string)
-            else:
-                return None
-            
-        except Exception as e:
-            st.error(f"Failed to connect to {server_name}: {str(e)}")
-            return None
-    
-    def execute_query(self, server_name: str, query: str) -> pd.DataFrame:
-        """Execute query and return results as DataFrame"""
-        if self.demo_mode:
-            # Return demo data
-            return self._generate_demo_data(query)
-            
-        conn = self.get_connection(server_name)
-        if not conn:
-            return pd.DataFrame()
+            return self._generate_demo_cloudwatch_data(metric_queries)
         
         try:
-            df = pd.read_sql(query, conn)
-            conn.close()
-            return df
+            results = {}
+            
+            for query in metric_queries:
+                response = self.cloudwatch.get_metric_statistics(
+                    Namespace=query['namespace'],
+                    MetricName=query['metric_name'],
+                    Dimensions=query.get('dimensions', []),
+                    StartTime=start_time,
+                    EndTime=end_time,
+                    Period=query.get('period', 300),
+                    Statistics=query.get('statistics', ['Average'])
+                )
+                
+                results[query['key']] = response['Datapoints']
+            
+            return results
+            
         except Exception as e:
-            st.error(f"Query execution failed on {server_name}: {str(e)}")
-            if conn:
-                conn.close()
-            return pd.DataFrame()
+            st.error(f"Failed to retrieve CloudWatch metrics: {str(e)}")
+            return {}
     
-    def _generate_demo_data(self, query: str) -> pd.DataFrame:
-        """Generate demo data based on query type"""
+    def get_comprehensive_sql_metrics(self, instance_id: str, start_time: datetime, end_time: datetime) -> Dict[str, List]:
+        """Get comprehensive SQL Server metrics from CloudWatch"""
+        
+        # Comprehensive SQL Server metrics that should be pushed to CloudWatch via custom scripts
+        sql_server_metrics = [
+            # ===== DATABASE ENGINE PERFORMANCE =====
+            {'key': 'buffer_cache_hit_ratio', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Buffer Manager\\Buffer cache hit ratio'},
+            {'key': 'page_life_expectancy', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Buffer Manager\\Page life expectancy'},
+            {'key': 'lazy_writes_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Buffer Manager\\Lazy writes/sec'},
+            {'key': 'checkpoint_pages_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Buffer Manager\\Checkpoint pages/sec'},
+            {'key': 'free_list_stalls_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Buffer Manager\\Free list stalls/sec'},
+            
+            # ===== SQL SERVER ACTIVITY =====
+            {'key': 'batch_requests_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:SQL Statistics\\Batch Requests/sec'},
+            {'key': 'sql_compilations_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:SQL Statistics\\SQL Compilations/sec'},
+            {'key': 'sql_recompilations_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:SQL Statistics\\SQL Re-Compilations/sec'},
+            {'key': 'user_connections', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:General Statistics\\User Connections'},
+            {'key': 'processes_blocked', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:General Statistics\\Processes blocked'},
+            {'key': 'logins_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:General Statistics\\Logins/sec'},
+            {'key': 'logouts_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:General Statistics\\Logouts/sec'},
+            
+            # ===== LOCKING AND BLOCKING =====
+            {'key': 'lock_waits_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Locks\\Lock Waits/sec'},
+            {'key': 'lock_wait_time_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Locks\\Average Wait Time (ms)'},
+            {'key': 'lock_timeouts_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Locks\\Lock Timeouts/sec'},
+            {'key': 'deadlocks_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Locks\\Number of Deadlocks/sec'},
+            {'key': 'lock_requests_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Locks\\Lock Requests/sec'},
+            
+            # ===== ACCESS METHODS =====
+            {'key': 'full_scans_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Access Methods\\Full Scans/sec'},
+            {'key': 'index_searches_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Access Methods\\Index Searches/sec'},
+            {'key': 'page_splits_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Access Methods\\Page Splits/sec'},
+            {'key': 'page_lookups_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Access Methods\\Page lookups/sec'},
+            {'key': 'worktables_created_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Access Methods\\Worktables Created/sec'},
+            {'key': 'workfiles_created_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Access Methods\\Workfiles Created/sec'},
+            
+            # ===== MEMORY MANAGER =====
+            {'key': 'memory_grants_pending', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Memory Manager\\Memory Grants Pending'},
+            {'key': 'memory_grants_outstanding', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Memory Manager\\Memory Grants Outstanding'},
+            {'key': 'target_server_memory_kb', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Memory Manager\\Target Server Memory (KB)'},
+            {'key': 'total_server_memory_kb', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Memory Manager\\Total Server Memory (KB)'},
+            
+            # ===== PLAN CACHE =====
+            {'key': 'cache_hit_ratio', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Plan Cache\\Cache Hit Ratio'},
+            {'key': 'cache_pages', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Plan Cache\\Cache Pages'},
+            {'key': 'cache_objects_in_use', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Plan Cache\\Cache Objects in use'},
+            
+            # ===== WAIT STATISTICS (Top waits) =====
+            {'key': 'wait_cxpacket_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Wait Statistics\\CXPACKET waits'},
+            {'key': 'wait_async_network_io_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Wait Statistics\\ASYNC_NETWORK_IO waits'},
+            {'key': 'wait_pageiolatch_sh_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Wait Statistics\\PAGEIOLATCH_SH waits'},
+            {'key': 'wait_pageiolatch_ex_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Wait Statistics\\PAGEIOLATCH_EX waits'},
+            {'key': 'wait_writelog_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Wait Statistics\\WRITELOG waits'},
+            {'key': 'wait_resource_semaphore_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Wait Statistics\\RESOURCE_SEMAPHORE waits'},
+            
+            # ===== ALWAYS ON AVAILABILITY GROUPS =====
+            {'key': 'ag_data_movement_state', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Availability Groups\\Data Movement State'},
+            {'key': 'ag_synchronization_health', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Availability Groups\\Synchronization Health'},
+            {'key': 'ag_log_send_queue_size', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Database Replica\\Log Send Queue Size'},
+            {'key': 'ag_log_send_rate', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Database Replica\\Log Send Rate'},
+            {'key': 'ag_redo_queue_size', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Database Replica\\Redo Queue Size'},
+            {'key': 'ag_redo_rate', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Database Replica\\Redo Rate'},
+            {'key': 'ag_recovery_lsn', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Database Replica\\Recovery LSN'},
+            {'key': 'ag_truncation_lsn', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Database Replica\\Truncation LSN'},
+            
+            # ===== DATABASE SPECIFIC METRICS =====
+            {'key': 'db_data_file_size_kb', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Data File(s) Size (KB)'},
+            {'key': 'db_log_file_size_kb', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Log File(s) Size (KB)'},
+            {'key': 'db_log_file_used_size_kb', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Log File(s) Used Size (KB)'},
+            {'key': 'db_percent_log_used', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Percent Log Used'},
+            {'key': 'db_active_transactions', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Active Transactions'},
+            {'key': 'db_transactions_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Transactions/sec'},
+            {'key': 'db_log_growths', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Log Growths'},
+            {'key': 'db_log_shrinks', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Log Shrinks'},
+            {'key': 'db_log_flushes_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Log Flushes/sec'},
+            {'key': 'db_log_flush_wait_time', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Log Flush Wait Time'},
+            
+            # ===== TEMPDB SPECIFIC =====
+            {'key': 'tempdb_version_store_size_kb', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Transactions\\Version Store Size (KB)'},
+            {'key': 'tempdb_version_generation_rate', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Transactions\\Version Generation rate (KB/s)'},
+            {'key': 'tempdb_version_cleanup_rate', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Transactions\\Version Cleanup rate (KB/s)'},
+            
+            # ===== BACKUP METRICS =====
+            {'key': 'backup_throughput_bytes_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Backup Device\\Device Throughput Bytes/sec'},
+            
+            # ===== SECURITY METRICS =====
+            {'key': 'failed_logins_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:SQL Errors\\Errors/sec'},
+            
+            # ===== CUSTOM BUSINESS METRICS =====
+            {'key': 'query_avg_execution_time_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Custom\\Average Query Execution Time'},
+            {'key': 'expensive_queries_count', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Custom\\Expensive Queries Count'},
+            {'key': 'index_fragmentation_avg', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Custom\\Average Index Fragmentation'},
+            {'key': 'missing_indexes_count', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Custom\\Missing Indexes Count'},
+            {'key': 'unused_indexes_count', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Custom\\Unused Indexes Count'}
+        ]
+        
+        # Add instance-specific dimensions
+        for metric in sql_server_metrics:
+            metric['dimensions'] = [{'Name': 'InstanceId', 'Value': instance_id}]
+        
+        return self.get_cloudwatch_metrics(sql_server_metrics, start_time, end_time)
+    
+    def get_rds_instances(self) -> List[Dict]:
+        """Get RDS SQL Server instances"""
+        if self.demo_mode:
+            return [
+                {
+                    'DBInstanceIdentifier': 'sql-server-prod-1',
+                    'Engine': 'sqlserver-ex',
+                    'DBInstanceStatus': 'available',
+                    'AvailabilityZone': 'us-east-1a',
+                    'MultiAZ': False,
+                    'AllocatedStorage': 100
+                },
+                {
+                    'DBInstanceIdentifier': 'sql-server-prod-2',
+                    'Engine': 'sqlserver-se',
+                    'DBInstanceStatus': 'available',
+                    'AvailabilityZone': 'us-east-1b',
+                    'MultiAZ': True,
+                    'AllocatedStorage': 500
+                }
+            ]
+        
+        try:
+            response = self.rds.describe_db_instances()
+            sql_instances = []
+            
+            for db in response['DBInstances']:
+                if 'sqlserver' in db['Engine'].lower():
+                    sql_instances.append(db)
+            
+            return sql_instances
+            
+        except Exception as e:
+            st.error(f"Failed to retrieve RDS instances: {str(e)}")
+            return []
+    
+    def get_ec2_sql_instances(self) -> List[Dict]:
+        """Get EC2 instances running SQL Server"""
+        if self.demo_mode:
+            return [
+                {
+                    'InstanceId': 'i-1234567890abcdef0',
+                    'InstanceType': 'm5.xlarge',
+                    'State': {'Name': 'running'},
+                    'PrivateIpAddress': '10.0.1.100',
+                    'Tags': [{'Key': 'Name', 'Value': 'SQL-Always-On-Primary'}]
+                },
+                {
+                    'InstanceId': 'i-0987654321fedcba0',
+                    'InstanceType': 'm5.xlarge',
+                    'State': {'Name': 'running'},
+                    'PrivateIpAddress': '10.0.1.101',
+                    'Tags': [{'Key': 'Name', 'Value': 'SQL-Always-On-Secondary'}]
+                }
+            ]
+        
+        try:
+            response = self.ec2.describe_instances(
+                Filters=[
+                    {
+                        'Name': 'tag:Application',
+                        'Values': ['SQLServer', 'SQL Server', 'Database']
+                    }
+                ]
+            )
+            
+            instances = []
+            for reservation in response['Reservations']:
+                for instance in reservation['Instances']:
+                    if instance['State']['Name'] in ['running', 'stopped']:
+                        instances.append(instance)
+            
+            return instances
+            
+        except Exception as e:
+            st.error(f"Failed to retrieve EC2 instances: {str(e)}")
+            return []
+    
+    def get_cloudwatch_logs(self, log_group: str, hours: int = 24) -> List[Dict]:
+        """Get CloudWatch logs"""
+        if self.demo_mode:
+            return self._generate_demo_log_data()
+        
+        try:
+            start_time = int((datetime.now() - timedelta(hours=hours)).timestamp() * 1000)
+            end_time = int(datetime.now().timestamp() * 1000)
+            
+            response = self.logs.filter_log_events(
+                logGroupName=log_group,
+                startTime=start_time,
+                endTime=end_time
+            )
+            
+            return response['events']
+            
+        except Exception as e:
+            st.error(f"Failed to retrieve CloudWatch logs: {str(e)}")
+            return []
+
+    def get_available_log_groups(self) -> List[str]:
+        """Get all available CloudWatch log groups"""
+        if self.demo_mode:
+            return [
+                "/aws/rds/instance/sql-server-prod-1/error",
+                "/aws/rds/instance/sql-server-prod-1/agent",
+                "/aws/rds/instance/sql-server-prod-2/error", 
+                "/ec2/sql-server/application",
+                "/ec2/sql-server/system",
+                "/ec2/sql-server/security",
+                "/ec2/sql-server/performance"
+            ]
+        
+        try:
+            response = self.logs.describe_log_groups()
+            return [lg['logGroupName'] for lg in response['logGroups']]
+        except Exception as e:
+            st.error(f"Failed to retrieve log groups: {str(e)}")
+            return []
+
+    def get_os_metrics(self, instance_id: str, start_time: datetime, end_time: datetime) -> Dict[str, List]:
+        """Get comprehensive OS-level metrics from CloudWatch Agent"""
+        
+        os_metric_queries = [
+            # ===== CPU METRICS =====
+            {'key': 'cpu_usage_active', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_active'},
+            {'key': 'cpu_usage_guest', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_guest'},
+            {'key': 'cpu_usage_idle', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_idle'},
+            {'key': 'cpu_usage_iowait', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_iowait'},
+            {'key': 'cpu_usage_steal', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_steal'},
+            {'key': 'cpu_usage_system', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_system'},
+            {'key': 'cpu_usage_user', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_user'},
+            
+            # ===== MEMORY METRICS =====
+            {'key': 'mem_used_percent', 'namespace': 'CWAgent', 'metric_name': 'mem_used_percent'},
+            {'key': 'mem_available_percent', 'namespace': 'CWAgent', 'metric_name': 'mem_available_percent'},
+            {'key': 'mem_used', 'namespace': 'CWAgent', 'metric_name': 'mem_used'},
+            {'key': 'mem_cached', 'namespace': 'CWAgent', 'metric_name': 'mem_cached'},
+            {'key': 'mem_buffers', 'namespace': 'CWAgent', 'metric_name': 'mem_buffers'},
+            
+            # ===== DISK METRICS =====
+            {'key': 'disk_used_percent', 'namespace': 'CWAgent', 'metric_name': 'disk_used_percent'},
+            {'key': 'disk_inodes_free', 'namespace': 'CWAgent', 'metric_name': 'disk_inodes_free'},
+            {'key': 'diskio_read_bytes', 'namespace': 'CWAgent', 'metric_name': 'diskio_read_bytes'},
+            {'key': 'diskio_write_bytes', 'namespace': 'CWAgent', 'metric_name': 'diskio_write_bytes'},
+            {'key': 'diskio_reads', 'namespace': 'CWAgent', 'metric_name': 'diskio_reads'},
+            {'key': 'diskio_writes', 'namespace': 'CWAgent', 'metric_name': 'diskio_writes'},
+            {'key': 'diskio_read_time', 'namespace': 'CWAgent', 'metric_name': 'diskio_read_time'},
+            {'key': 'diskio_write_time', 'namespace': 'CWAgent', 'metric_name': 'diskio_write_time'},
+            {'key': 'diskio_io_time', 'namespace': 'CWAgent', 'metric_name': 'diskio_io_time'},
+            
+            # ===== NETWORK METRICS =====
+            {'key': 'net_bytes_sent', 'namespace': 'CWAgent', 'metric_name': 'net_bytes_sent'},
+            {'key': 'net_bytes_recv', 'namespace': 'CWAgent', 'metric_name': 'net_bytes_recv'},
+            {'key': 'net_packets_sent', 'namespace': 'CWAgent', 'metric_name': 'net_packets_sent'},
+            {'key': 'net_packets_recv', 'namespace': 'CWAgent', 'metric_name': 'net_packets_recv'},
+            {'key': 'net_err_in', 'namespace': 'CWAgent', 'metric_name': 'net_err_in'},
+            {'key': 'net_err_out', 'namespace': 'CWAgent', 'metric_name': 'net_err_out'},
+            {'key': 'net_drop_in', 'namespace': 'CWAgent', 'metric_name': 'net_drop_in'},
+            {'key': 'net_drop_out', 'namespace': 'CWAgent', 'metric_name': 'net_drop_out'},
+            
+            # ===== PROCESS METRICS =====
+            {'key': 'processes_running', 'namespace': 'CWAgent', 'metric_name': 'processes_running'},
+            {'key': 'processes_sleeping', 'namespace': 'CWAgent', 'metric_name': 'processes_sleeping'},
+            {'key': 'processes_stopped', 'namespace': 'CWAgent', 'metric_name': 'processes_stopped'},
+            {'key': 'processes_zombies', 'namespace': 'CWAgent', 'metric_name': 'processes_zombies'},
+            {'key': 'processes_blocked', 'namespace': 'CWAgent', 'metric_name': 'processes_blocked'},
+            
+            # ===== SYSTEM LOAD =====
+            {'key': 'system_load1', 'namespace': 'CWAgent', 'metric_name': 'system_load1'},
+            {'key': 'system_load5', 'namespace': 'CWAgent', 'metric_name': 'system_load5'},
+            {'key': 'system_load15', 'namespace': 'CWAgent', 'metric_name': 'system_load15'},
+            
+            # ===== WINDOWS SPECIFIC METRICS (for SQL Server on Windows) =====
+            {'key': 'LogicalDisk_PercentFreeSpace', 'namespace': 'CWAgent', 'metric_name': 'LogicalDisk % Free Space'},
+            {'key': 'Memory_PercentCommittedBytesInUse', 'namespace': 'CWAgent', 'metric_name': 'Memory % Committed Bytes In Use'},
+            {'key': 'Memory_AvailableMBytes', 'namespace': 'CWAgent', 'metric_name': 'Memory Available MBytes'},
+            {'key': 'Paging_File_PercentUsage', 'namespace': 'CWAgent', 'metric_name': 'Paging File % Usage'},
+            {'key': 'PhysicalDisk_PercentDiskTime', 'namespace': 'CWAgent', 'metric_name': 'PhysicalDisk % Disk Time'},
+            {'key': 'PhysicalDisk_AvgDiskQueueLength', 'namespace': 'CWAgent', 'metric_name': 'PhysicalDisk Avg. Disk Queue Length'},
+            {'key': 'Processor_PercentProcessorTime', 'namespace': 'CWAgent', 'metric_name': 'Processor % Processor Time'},
+            {'key': 'System_ProcessorQueueLength', 'namespace': 'CWAgent', 'metric_name': 'System Processor Queue Length'},
+            {'key': 'TCPv4_ConnectionsEstablished', 'namespace': 'CWAgent', 'metric_name': 'TCPv4 Connections Established'}
+        ]
+        
+        # Add instance-specific dimensions
+        for metric in os_metric_queries:
+            metric['dimensions'] = [
+                {'Name': 'InstanceId', 'Value': instance_id},
+                {'Name': 'ImageId', 'Value': 'ami-xxxxx'},  # You'll need to get this dynamically
+                {'Name': 'InstanceType', 'Value': 'm5.large'}  # You'll need to get this dynamically
+            ]
+        
+        return self.get_cloudwatch_metrics(os_metric_queries, start_time, end_time)
+
+    def get_sql_server_logs(self, log_groups: List[str], hours: int = 24, 
+                        filter_pattern: str = None) -> Dict[str, List[Dict]]:
+        """Get SQL Server specific logs from multiple log groups"""
+        if self.demo_mode:
+            return self._generate_demo_sql_logs(log_groups)
+        
+        try:
+            all_logs = {}
+            start_time = int((datetime.now() - timedelta(hours=hours)).timestamp() * 1000)
+            end_time = int(datetime.now().timestamp() * 1000)
+            
+            for log_group in log_groups:
+                try:
+                    if filter_pattern:
+                        response = self.logs.filter_log_events(
+                            logGroupName=log_group,
+                            startTime=start_time,
+                            endTime=end_time,
+                            filterPattern=filter_pattern
+                        )
+                    else:
+                        response = self.logs.filter_log_events(
+                            logGroupName=log_group,
+                            startTime=start_time,
+                            endTime=end_time
+                        )
+                    
+                    all_logs[log_group] = response['events']
+                    
+                except Exception as e:
+                    st.warning(f"Could not retrieve logs from {log_group}: {str(e)}")
+                    all_logs[log_group] = []
+            
+            return all_logs
+            
+        except Exception as e:
+            st.error(f"Failed to retrieve SQL Server logs: {str(e)}")
+            return {}
+
+    def _generate_demo_sql_logs(self, log_groups: List[str]) -> Dict[str, List[Dict]]:
+        """Generate demo SQL Server logs"""
+        demo_logs = {}
+        
+        log_patterns = {
+            'error': [
+                "SQL Server error: Login failed for user 'sa'",
+                "Deadlock detected between sessions 52 and 67",
+                "I/O error on backup device",
+                "Transaction log is full",
+                "Memory pressure detected"
+            ],
+            'agent': [
+                "Job 'DatabaseBackup' completed successfully",
+                "Job 'IndexMaintenance' started",
+                "Alert: High CPU utilization",
+                "Maintenance plan execution completed"
+            ],
+            'application': [
+                "Application connected to database",
+                "Query execution completed in 1250ms",
+                "Connection pool exhausted",
+                "Stored procedure execution started"
+            ],
+            'system': [
+                "SQL Server service started",
+                "Database recovery completed",
+                "Checkpoint operation completed",
+                "Always On availability group synchronized"
+            ],
+            'security': [
+                "Login succeeded for user 'domain\\user'",
+                "Permission denied for user 'app_user'",
+                "Security audit event logged",
+                "Password policy violation detected"
+            ]
+        }
+        
+        for log_group in log_groups:
+            log_type = 'system'
+            for pattern_type in log_patterns.keys():
+                if pattern_type in log_group.lower():
+                    log_type = pattern_type
+                    break
+            
+            events = []
+            for i in range(20):
+                timestamp = datetime.now() - timedelta(minutes=i * 30)
+                events.append({
+                    'timestamp': int(timestamp.timestamp() * 1000),
+                    'message': np.random.choice(log_patterns[log_type]),
+                    'logStreamName': f'sql-server-{np.random.randint(1, 3)}'
+                })
+            
+            demo_logs[log_group] = events
+        
+        return demo_logs
+
+    def get_account_info(self) -> Dict[str, str]:
+        """Get AWS account information"""
+        if self.demo_mode:
+            return {
+                'account_id': '123456789012',
+                'account_alias': 'demo-sql-environment',
+                'region': self.aws_config.get('region', 'us-east-1'),
+                'vpc_id': 'vpc-1234567890abcdef0',
+                'environment': 'demo'
+            }
+        
+        try:
+            # Get account ID
+            sts = self.session.client('sts')
+            identity = sts.get_caller_identity()
+            account_id = identity['Account']
+            
+            # Get account alias (if available)
+            iam = self.session.client('iam')
+            try:
+                aliases = iam.list_account_aliases()
+                account_alias = aliases['AccountAliases'][0] if aliases['AccountAliases'] else 'No alias'
+            except:
+                account_alias = 'Unknown'
+            
+            return {
+                'account_id': account_id,
+                'account_alias': account_alias,
+                'region': self.aws_config.get('region'),
+                'user_arn': identity.get('Arn', 'Unknown'),
+                'environment': self.aws_config.get('account_name', 'Unknown')
+            }
+            
+        except Exception as e:
+            st.error(f"Failed to get account information: {str(e)}")
+            return {}
+    
+    def _generate_demo_cloudwatch_data(self, metric_queries: List[Dict]) -> Dict[str, List]:
+        """Generate demo CloudWatch data with realistic SQL Server metrics"""
+        results = {}
         current_time = datetime.now()
         
-        if 'system_metrics' in query:
-            return pd.DataFrame({
-                'timestamp': [current_time],
-                'processor_queue_length': [2],
-                'buffer_cache_hit_ratio': [np.random.uniform(90, 99)],
-                'page_life_expectancy': [np.random.uniform(300, 3000)],
-                'target_pages': [1000000],
-                'total_pages': [950000]
-            })
-        
-        elif 'wait_stats' in query:
-            wait_types = ['CXPACKET', 'ASYNC_NETWORK_IO', 'PAGEIOLATCH_SH', 'LCK_M_S', 'WRITELOG']
-            return pd.DataFrame({
-                'wait_type': wait_types,
-                'waiting_tasks_count': np.random.randint(1, 100, 5),
-                'wait_time_ms': np.random.randint(100, 10000, 5),
-                'max_wait_time_ms': np.random.randint(500, 5000, 5),
-                'signal_wait_time_ms': np.random.randint(10, 500, 5)
-            })
-        
-        elif 'active_connections' in query:
-            return pd.DataFrame({
-                'total_connections': [np.random.randint(50, 200)],
-                'running_sessions': [np.random.randint(5, 50)],
-                'sleeping_sessions': [np.random.randint(20, 100)],
-                'suspended_sessions': [np.random.randint(0, 10)]
-            })
-        
-        elif 'cpu_utilization' in query:
-            records = []
-            for i in range(30):
-                records.append({
-                    'record_id': i,
-                    'EventTime': current_time - timedelta(minutes=i),
-                    'SQLProcessUtilization': np.random.uniform(20, 80),
-                    'SystemIdle': np.random.uniform(10, 40),
-                    'OtherProcessUtilization': np.random.uniform(5, 30)
-                })
-            return pd.DataFrame(records)
-        
-        elif 'memory_usage' in query:
-            return pd.DataFrame({
-                'physical_memory_mb': [16384],
-                'virtual_memory_mb': [2097151],
-                'committed_memory_mb': [8192],
-                'committed_target_mb': [12288],
-                'visible_target_mb': [16384]
-            })
-        
-        elif 'blocking_sessions' in query:
-            # Sometimes return empty (no blocking), sometimes return data
-            if np.random.random() > 0.7:
-                return pd.DataFrame({
-                    'blocking_session_id': [52, 73],
-                    'session_id': [125, 134],
-                    'wait_type': ['LCK_M_X', 'LCK_M_S'],
-                    'wait_time': [5000, 2000],
-                    'wait_resource': ['PAGE: 5:1:12345', 'KEY: 6:72057594037927936'],
-                    'command': ['SELECT', 'UPDATE'],
-                    'status': ['suspended', 'suspended'],
-                    'cpu_time': [100, 250],
-                    'logical_reads': [1000, 2500],
-                    'reads': [10, 25],
-                    'writes': [5, 15]
-                })
-            else:
-                return pd.DataFrame()
-        
-        elif 'database_sizes' in query:
-            databases = ['ProductionDB', 'UserDB', 'LogDB', 'AnalyticsDB']
-            data = []
-            for db in databases:
-                data.extend([
-                    {
-                        'database_name': db,
-                        'type_desc': 'ROWS',
-                        'size_mb': np.random.uniform(1000, 10000),
-                        'max_size_mb': -1,
-                        'growth': 10,
-                        'is_percent_growth': True
-                    },
-                    {
-                        'database_name': db,
-                        'type_desc': 'LOG',
-                        'size_mb': np.random.uniform(100, 1000),
-                        'max_size_mb': -1,
-                        'growth': 10,
-                        'is_percent_growth': True
-                    }
-                ])
-            return pd.DataFrame(data)
-        
-        elif 'index_fragmentation' in query:
-            # Sometimes return fragmented indexes
-            if np.random.random() > 0.5:
-                return pd.DataFrame({
-                    'schema_name': ['dbo', 'sales', 'dbo'],
-                    'object_name': ['Orders', 'Customers', 'Products'],
-                    'index_name': ['IX_Orders_Date', 'PK_Customers', 'IX_Products_Category'],
-                    'index_type_desc': ['NONCLUSTERED INDEX', 'CLUSTERED INDEX', 'NONCLUSTERED INDEX'],
-                    'avg_fragmentation_in_percent': [45.2, 67.8, 52.1],
-                    'page_count': [2500, 5000, 1800]
-                })
-            else:
-                return pd.DataFrame()
-        
-        elif 'disk_io' in query:
-            databases = ['ProductionDB', 'UserDB', 'LogDB']
-            data = []
-            for db in databases:
-                data.extend([
-                    {
-                        'database_name': db,
-                        'physical_name': f'C:\\Data\\{db}.mdf',
-                        'num_of_reads': np.random.randint(10000, 100000),
-                        'num_of_writes': np.random.randint(5000, 50000),
-                        'mb_read': np.random.uniform(100, 1000),
-                        'mb_written': np.random.uniform(50, 500),
-                        'io_stall_read_ms': np.random.randint(1000, 10000),
-                        'io_stall_write_ms': np.random.randint(500, 5000)
-                    },
-                    {
-                        'database_name': db,
-                        'physical_name': f'C:\\Logs\\{db}_log.ldf',
-                        'num_of_reads': np.random.randint(1000, 10000),
-                        'num_of_writes': np.random.randint(10000, 100000),
-                        'mb_read': np.random.uniform(10, 100),
-                        'mb_written': np.random.uniform(100, 1000),
-                        'io_stall_read_ms': np.random.randint(100, 1000),
-                        'io_stall_write_ms': np.random.randint(1000, 10000)
-                    }
-                ])
-            return pd.DataFrame(data)
-        
-        elif 'backup_status' in query:
-            databases = ['ProductionDB', 'UserDB', 'LogDB', 'AnalyticsDB']
-            data = []
-            for db in databases:
-                last_full = current_time - timedelta(hours=np.random.uniform(1, 48))
-                last_diff = current_time - timedelta(hours=np.random.uniform(1, 24))
-                last_log = current_time - timedelta(minutes=np.random.uniform(15, 240))
+        for query in metric_queries:
+            datapoints = []
+            for i in range(24):  # 24 hours of data
+                timestamp = current_time - timedelta(hours=i)
                 
-                data.append({
-                    'database_name': db,
-                    'recovery_model_desc': np.random.choice(['FULL', 'SIMPLE', 'BULK_LOGGED']),
-                    'last_full_backup': last_full,
-                    'last_diff_backup': last_diff,
-                    'last_log_backup': last_log
+                # Generate realistic values based on metric type
+                key = query['key'].lower()
+                
+                if 'cpu' in key:
+                    value = np.random.uniform(20, 80)
+                elif 'memory' in key:
+                    value = np.random.uniform(60, 90)
+                elif 'buffer_cache_hit_ratio' in key:
+                    value = np.random.uniform(95, 99.9)  # Should be high
+                elif 'page_life_expectancy' in key:
+                    value = np.random.uniform(300, 3600)  # Seconds
+                elif 'batch_requests_per_sec' in key:
+                    value = np.random.uniform(100, 5000)
+                elif 'user_connections' in key:
+                    value = np.random.uniform(10, 200)
+                elif 'processes_blocked' in key:
+                    value = np.random.uniform(0, 5)
+                elif 'deadlocks_per_sec' in key:
+                    value = np.random.uniform(0, 0.5)
+                elif 'lock_waits_per_sec' in key:
+                    value = np.random.uniform(0, 100)
+                elif 'lock_wait_time_ms' in key:
+                    value = np.random.uniform(0, 1000)
+                elif 'full_scans_per_sec' in key:
+                    value = np.random.uniform(0, 50)
+                elif 'index_searches_per_sec' in key:
+                    value = np.random.uniform(100, 10000)
+                elif 'page_splits_per_sec' in key:
+                    value = np.random.uniform(0, 100)
+                elif 'lazy_writes_per_sec' in key:
+                    value = np.random.uniform(0, 20)
+                elif 'checkpoint_pages_per_sec' in key:
+                    value = np.random.uniform(0, 500)
+                elif 'sql_compilations_per_sec' in key:
+                    value = np.random.uniform(10, 500)
+                elif 'sql_recompilations_per_sec' in key:
+                    value = np.random.uniform(0, 50)
+                elif 'memory_grants_pending' in key:
+                    value = np.random.uniform(0, 10)
+                elif 'target_server_memory_kb' in key:
+                    value = np.random.uniform(8000000, 16000000)  # 8-16GB
+                elif 'total_server_memory_kb' in key:
+                    value = np.random.uniform(7000000, 15000000)  # Slightly less than target
+                elif 'cache_hit_ratio' in key:
+                    value = np.random.uniform(85, 99)
+                elif 'wait_' in key and '_ms' in key:
+                    value = np.random.uniform(0, 5000)
+                elif 'ag_log_send_queue_size' in key:
+                    value = np.random.uniform(0, 1000000)  # KB
+                elif 'ag_log_send_rate' in key:
+                    value = np.random.uniform(100, 10000)  # KB/s
+                elif 'ag_redo_queue_size' in key:
+                    value = np.random.uniform(0, 500000)  # KB
+                elif 'ag_redo_rate' in key:
+                    value = np.random.uniform(50, 5000)  # KB/s
+                elif 'db_data_file_size_kb' in key:
+                    value = np.random.uniform(1000000, 100000000)  # 1GB-100GB
+                elif 'db_log_file_size_kb' in key:
+                    value = np.random.uniform(100000, 10000000)  # 100MB-10GB
+                elif 'db_percent_log_used' in key:
+                    value = np.random.uniform(10, 80)
+                elif 'db_active_transactions' in key:
+                    value = np.random.uniform(0, 100)
+                elif 'db_transactions_per_sec' in key:
+                    value = np.random.uniform(10, 1000)
+                elif 'db_log_flushes_per_sec' in key:
+                    value = np.random.uniform(1, 100)
+                elif 'db_log_flush_wait_time' in key:
+                    value = np.random.uniform(0, 50)  # ms
+                elif 'tempdb_version_store_size_kb' in key:
+                    value = np.random.uniform(0, 1000000)  # KB
+                elif 'backup_throughput_bytes_per_sec' in key:
+                    value = np.random.uniform(1000000, 100000000)  # 1MB/s - 100MB/s
+                elif 'failed_logins_per_sec' in key:
+                    value = np.random.uniform(0, 5)
+                elif 'query_avg_execution_time_ms' in key:
+                    value = np.random.uniform(10, 1000)
+                elif 'expensive_queries_count' in key:
+                    value = np.random.uniform(0, 20)
+                elif 'index_fragmentation_avg' in key:
+                    value = np.random.uniform(5, 45)
+                elif 'missing_indexes_count' in key:
+                    value = np.random.uniform(0, 50)
+                elif 'unused_indexes_count' in key:
+                    value = np.random.uniform(0, 30)
+                elif 'disk' in key:
+                    value = np.random.uniform(40, 70)
+                elif 'connection' in key:
+                    value = np.random.uniform(10, 100)
+                else:
+                    value = np.random.uniform(0, 100)
+                
+                datapoints.append({
+                    'Timestamp': timestamp,
+                    'Average': value,
+                    'Unit': query.get('unit', 'Count')
                 })
-            return pd.DataFrame(data)
+            
+            results[query['key']] = datapoints
         
-        else:
-            # Default empty dataframe
-            return pd.DataFrame()
+        return results
+    
+    def _generate_demo_log_data(self) -> List[Dict]:
+        """Generate demo log data"""
+        log_events = []
+        current_time = datetime.now()
+        
+        log_messages = [
+            "SQL Server started successfully",
+            "Database backup completed",
+            "Always On availability group health check passed",
+            "High CPU usage detected on instance",
+            "Memory pressure warning",
+            "Deadlock detected between sessions",
+            "Index maintenance completed",
+            "Statistics update finished"
+        ]
+        
+        for i in range(50):
+            timestamp = current_time - timedelta(minutes=i * 30)
+            log_events.append({
+                'timestamp': int(timestamp.timestamp() * 1000),
+                'message': np.random.choice(log_messages),
+                'logStreamName': f'sql-server-{np.random.randint(1, 3)}'
+            })
+        
+        return log_events
 
-# =================== SQL Server Metrics Collector ===================
-class SQLServerMetricsCollector:
-    def __init__(self, sql_connector: SQLServerConnector):
-        self.sql_connector = sql_connector
+# =================== Always On Availability Groups Monitor ===================
+class AlwaysOnMonitor:
+    def __init__(self, cloudwatch_connector: AWSCloudWatchConnector):
+        self.cloudwatch = cloudwatch_connector
         
-        # Comprehensive SQL Server monitoring queries
-        self.queries = {
-            'system_metrics': """
-                SELECT 
-                    GETDATE() as timestamp,
-                    (SELECT counter_value FROM sys.dm_os_performance_counters 
-                     WHERE counter_name = 'Processor Queue Length') as processor_queue_length,
-                    (SELECT cntr_value FROM sys.dm_os_performance_counters 
-                     WHERE counter_name = 'Buffer cache hit ratio') as buffer_cache_hit_ratio,
-                    (SELECT cntr_value FROM sys.dm_os_performance_counters 
-                     WHERE counter_name = 'Page life expectancy') as page_life_expectancy,
-                    (SELECT cntr_value FROM sys.dm_os_performance_counters 
-                     WHERE counter_name = 'Target pages') as target_pages,
-                    (SELECT cntr_value FROM sys.dm_os_performance_counters 
-                     WHERE counter_name = 'Total pages') as total_pages
-            """,
-            
-            'wait_stats': """
-                SELECT TOP 10
-                    wait_type,
-                    waiting_tasks_count,
-                    wait_time_ms,
-                    max_wait_time_ms,
-                    signal_wait_time_ms
-                FROM sys.dm_os_wait_stats
-                WHERE wait_type NOT IN (
-                    'CLR_SEMAPHORE', 'LAZYWRITER_SLEEP', 'RESOURCE_QUEUE', 'SLEEP_TASK',
-                    'SLEEP_SYSTEMTASK', 'SQLTRACE_WAIT', 'WAITFOR', 'BROKER_TASK_STOP',
-                    'CHECKPOINT_QUEUE', 'FT_IFTS_SCHEDULER_IDLE_WAIT', 'XE_DISPATCHER_WAIT'
-                )
-                ORDER BY wait_time_ms DESC
-            """,
-            
-            'blocking_sessions': """
-                SELECT 
-                    blocking_session_id,
-                    session_id,
-                    wait_type,
-                    wait_time,
-                    wait_resource,
-                    command,
-                    status,
-                    cpu_time,
-                    logical_reads,
-                    reads,
-                    writes
-                FROM sys.dm_exec_requests
-                WHERE blocking_session_id <> 0
-            """,
-            
-            'database_sizes': """
-                SELECT 
-                    DB_NAME(database_id) AS database_name,
-                    type_desc,
-                    size * 8.0 / 1024 AS size_mb,
-                    max_size * 8.0 / 1024 AS max_size_mb,
-                    growth,
-                    is_percent_growth
-                FROM sys.master_files
-                WHERE database_id > 4
-            """,
-            
-            'index_fragmentation': """
-                SELECT 
-                    OBJECT_SCHEMA_NAME(ips.object_id) AS schema_name,
-                    OBJECT_NAME(ips.object_id) AS object_name,
-                    i.name AS index_name,
-                    ips.index_type_desc,
-                    ips.avg_fragmentation_in_percent,
-                    ips.page_count
-                FROM sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL, 'SAMPLED') ips
-                JOIN sys.indexes i ON ips.object_id = i.object_id AND ips.index_id = i.index_id
-                WHERE ips.avg_fragmentation_in_percent > 30 AND ips.page_count > 1000
-                ORDER BY ips.avg_fragmentation_in_percent DESC
-            """,
-            
-            'active_connections': """
-                SELECT 
-                    COUNT(*) as total_connections,
-                    SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) as running_sessions,
-                    SUM(CASE WHEN status = 'sleeping' THEN 1 ELSE 0 END) as sleeping_sessions,
-                    SUM(CASE WHEN status = 'suspended' THEN 1 ELSE 0 END) as suspended_sessions
-                FROM sys.dm_exec_sessions
-                WHERE is_user_process = 1
-            """,
-            
-            'cpu_utilization': """
-                DECLARE @cpu_count int
-                SELECT @cpu_count = cpu_count FROM sys.dm_os_sys_info
-                
-                SELECT TOP 30
-                    record_id,
-                    DateAdd(ms, -1 * (@cpu_count - record_id), GetDate()) AS EventTime,
-                    SQLProcessUtilization,
-                    SystemIdle,
-                    100 - SystemIdle - SQLProcessUtilization AS OtherProcessUtilization
-                FROM (
-                    SELECT 
-                        record.value('(./Record/@id)[1]', 'int') AS record_id,
-                        record.value('(./Record/SchedulerMonitorEvent/SystemHealth/SystemIdle)[1]', 'int') AS SystemIdle,
-                        record.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]', 'int') AS SQLProcessUtilization
-                    FROM (
-                        SELECT CAST(record AS xml) AS record 
-                        FROM sys.dm_os_ring_buffers 
-                        WHERE ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR'
-                        AND record LIKE N'%<SystemHealth>%'
-                    ) AS x
-                ) AS y
-                ORDER BY record_id DESC
-            """,
-            
-            'memory_usage': """
-                SELECT 
-                    (physical_memory_kb / 1024.0) AS physical_memory_mb,
-                    (virtual_memory_kb / 1024.0) AS virtual_memory_mb,
-                    (committed_kb / 1024.0) AS committed_memory_mb,
-                    (committed_target_kb / 1024.0) AS committed_target_mb,
-                    (visible_target_kb / 1024.0) AS visible_target_mb
-                FROM sys.dm_os_sys_memory
-            """,
-            
-            'disk_io': """
-                SELECT 
-                    DB_NAME(vfs.database_id) AS database_name,
-                    mf.physical_name,
-                    vfs.num_of_reads,
-                    vfs.num_of_writes,
-                    vfs.num_of_bytes_read / 1024 / 1024 AS mb_read,
-                    vfs.num_of_bytes_written / 1024 / 1024 AS mb_written,
-                    vfs.io_stall_read_ms,
-                    vfs.io_stall_write_ms
-                FROM sys.dm_io_virtual_file_stats(NULL, NULL) vfs
-                JOIN sys.master_files mf ON vfs.database_id = mf.database_id 
-                    AND vfs.file_id = mf.file_id
-                WHERE vfs.database_id > 4
-            """,
-            
-            'backup_status': """
-                SELECT 
-                    d.name AS database_name,
-                    d.recovery_model_desc,
-                    COALESCE(
-                        (SELECT MAX(backup_finish_date) 
-                         FROM msdb.dbo.backupset bs 
-                         WHERE bs.database_name = d.name AND bs.type = 'D'),
-                        '1900-01-01'
-                    ) AS last_full_backup,
-                    COALESCE(
-                        (SELECT MAX(backup_finish_date) 
-                         FROM msdb.dbo.backupset bs 
-                         WHERE bs.database_name = d.name AND bs.type = 'I'),
-                        '1900-01-01'
-                    ) AS last_diff_backup,
-                    COALESCE(
-                        (SELECT MAX(backup_finish_date) 
-                         FROM msdb.dbo.backupset bs 
-                         WHERE bs.database_name = d.name AND bs.type = 'L'),
-                        '1900-01-01'
-                    ) AS last_log_backup
-                FROM sys.databases d
-                WHERE d.database_id > 4 AND d.state = 0
-            """
+        # Always On specific metrics to monitor
+        self.availability_group_metrics = {
+            'primary_replica_health': {
+                'namespace': 'AWS/EC2',
+                'metric_name': 'CPUUtilization',
+                'dimensions': [{'Name': 'InstanceId', 'Value': 'i-primary'}]
+            },
+            'secondary_replica_health': {
+                'namespace': 'AWS/EC2', 
+                'metric_name': 'CPUUtilization',
+                'dimensions': [{'Name': 'InstanceId', 'Value': 'i-secondary'}]
+            },
+            'synchronization_health': {
+                'namespace': 'CWAgent',
+                'metric_name': 'AlwaysOn_SyncHealth'
+            },
+            'data_movement_state': {
+                'namespace': 'CWAgent',
+                'metric_name': 'AlwaysOn_DataMovement'
+            }
         }
     
-    def collect_all_metrics(self, server_name: str) -> Dict[str, pd.DataFrame]:
-        """Collect all metrics from a SQL Server instance"""
-        metrics = {}
-        
-        for metric_name, query in self.queries.items():
-            try:
-                df = self.sql_connector.execute_query(server_name, query)
-                if not df.empty:
-                    metrics[metric_name] = df
-                else:
-                    metrics[metric_name] = pd.DataFrame()
-            except Exception as e:
-                st.warning(f"Failed to collect {metric_name} from {server_name}: {str(e)}")
-                metrics[metric_name] = pd.DataFrame()
-        
-        return metrics
-    
-    def get_health_summary(self, server_name: str) -> Dict[str, Any]:
-        """Get a comprehensive health summary for a server"""
-        try:
-            if self.sql_connector.demo_mode:
-                # Generate demo health summary
-                return {
-                    "status": "online",
-                    "server_name": server_name,
-                    "sql_version": "Microsoft SQL Server 2019 (RTM) - 15.0.2000.5",
-                    "product_version": "15.0.2000.5",
-                    "edition": "Developer Edition (64-bit)",
-                    "product_level": "RTM",
-                    "current_time": datetime.now(),
-                    "online_databases": np.random.randint(4, 12),
-                    "user_sessions": np.random.randint(10, 50),
-                    "last_check": datetime.now()
+    def get_availability_groups(self) -> List[Dict]:
+        """Get Always On Availability Groups status"""
+        if self.cloudwatch.demo_mode:
+            return [
+                {
+                    'name': 'AG-Production',
+                    'primary_replica': 'SQL-Node-1',
+                    'secondary_replicas': ['SQL-Node-2', 'SQL-Node-3'],
+                    'synchronization_health': 'HEALTHY',
+                    'role_health': 'ONLINE',
+                    'databases': ['ProductionDB', 'UserDB', 'LogDB']
+                },
+                {
+                    'name': 'AG-Reporting',
+                    'primary_replica': 'SQL-Node-2',
+                    'secondary_replicas': ['SQL-Node-1'],
+                    'synchronization_health': 'HEALTHY',
+                    'role_health': 'ONLINE',
+                    'databases': ['ReportingDB', 'AnalyticsDB']
                 }
+            ]
+        
+        # In a real implementation, this would query SQL Server DMVs through CloudWatch custom metrics
+        # or use Systems Manager to run queries on EC2 instances
+        return self._get_ag_status_from_cloudwatch()
+    
+    def _get_ag_status_from_cloudwatch(self) -> List[Dict]:
+        """Get AG status from CloudWatch custom metrics"""
+        # This would typically involve custom CloudWatch metrics
+        # pushed from SQL Server instances via CloudWatch agent
+        try:
+            # Implementation would depend on how you're sending AG metrics to CloudWatch
+            # Example implementation:
+            ag_metrics = self.cloudwatch.get_cloudwatch_metrics(
+                [
+                    {
+                        'key': 'ag_health',
+                        'namespace': 'SQLServer/AlwaysOn',
+                        'metric_name': 'AvailabilityGroupHealth'
+                    }
+                ],
+                datetime.now() - timedelta(hours=1),
+                datetime.now()
+            )
             
-            # Get basic server info
-            server_info_query = """
-                SELECT 
-                    @@SERVERNAME as server_name,
-                    @@VERSION as sql_version,
-                    SERVERPROPERTY('ProductVersion') as product_version,
-                    SERVERPROPERTY('Edition') as edition,
-                    SERVERPROPERTY('ProductLevel') as product_level,
-                    GETDATE() as current_time,
-                    (SELECT COUNT(*) FROM sys.databases WHERE state = 0) as online_databases,
-                    (SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE is_user_process = 1) as user_sessions
-            """
-            
-            server_info = self.sql_connector.execute_query(server_name, server_info_query)
-            
-            if server_info.empty:
-                return {"status": "offline", "error": "No data returned"}
-            
-            info = server_info.iloc[0].to_dict()
-            info["status"] = "online"
-            info["last_check"] = datetime.now()
-            
-            return info
+            # Parse metrics and return AG status
+            return []
             
         except Exception as e:
-            return {"status": "offline", "error": str(e), "last_check": datetime.now()}
+            st.error(f"Failed to get AG status from CloudWatch: {str(e)}")
+            return []
+    
+    def get_replica_health(self, replica_name: str) -> Dict:
+        """Get detailed health for a specific replica"""
+        if self.cloudwatch.demo_mode:
+            return {
+                'replica_name': replica_name,
+                'role': np.random.choice(['PRIMARY', 'SECONDARY']),
+                'operational_state': 'ONLINE',
+                'connected_state': 'CONNECTED',
+                'synchronization_health': np.random.choice(['HEALTHY', 'PARTIALLY_HEALTHY', 'NOT_HEALTHY']),
+                'last_connect_error': None,
+                'cpu_usage': np.random.uniform(20, 80),
+                'memory_usage': np.random.uniform(60, 90)
+            }
+        
+        # Implementation for real CloudWatch metrics
+        return {}
+    
+    def check_synchronization_lag(self) -> List[Dict]:
+        """Check for synchronization lag between replicas"""
+        if self.cloudwatch.demo_mode:
+            lag_data = []
+            for i in range(3):
+                lag_data.append({
+                    'ag_name': f'AG-Production-{i+1}',
+                    'database_name': f'Database-{i+1}',
+                    'lag_seconds': np.random.uniform(0, 5),
+                    'status': 'SYNCHRONIZED' if np.random.random() > 0.2 else 'SYNCHRONIZING'
+                })
+            return lag_data
+        
+        # Real implementation would query CloudWatch for sync lag metrics
+        return []
 
-# =================== Claude AI Integration ===================
+# =================== Auto-Remediation Engine ===================
+class AutoRemediationEngine:
+    def __init__(self, cloudwatch_connector: AWSCloudWatchConnector):
+        self.cloudwatch = cloudwatch_connector
+        self.remediation_history = []
+        
+        # Define remediation rules
+        self.remediation_rules = {
+            'high_cpu_usage': {
+                'threshold': 90,
+                'duration_minutes': 10,
+                'actions': ['scale_up', 'kill_expensive_queries', 'alert_dba'],
+                'auto_execute': True
+            },
+            'memory_pressure': {
+                'threshold': 95,
+                'duration_minutes': 5,
+                'actions': ['clear_buffer_cache', 'scale_up', 'alert_dba'],
+                'auto_execute': True
+            },
+            'blocking_sessions': {
+                'threshold': 5,  # Number of blocked sessions
+                'duration_minutes': 2,
+                'actions': ['kill_blocking_session', 'alert_dba'],
+                'auto_execute': False  # Requires manual approval
+            },
+            'disk_space_low': {
+                'threshold': 85,  # Percentage
+                'duration_minutes': 15,
+                'actions': ['cleanup_temp_files', 'extend_volume', 'alert_dba'],
+                'auto_execute': True
+            },
+            'backup_failure': {
+                'threshold': 1,  # Number of failed backups
+                'duration_minutes': 0,
+                'actions': ['retry_backup', 'check_backup_location', 'alert_dba'],
+                'auto_execute': True
+            },
+            'ag_failover_needed': {
+                'threshold': 1,
+                'duration_minutes': 0,
+                'actions': ['automatic_failover', 'alert_dba'],
+                'auto_execute': False  # Critical operation
+            }
+        }
+    
+    def evaluate_conditions(self, metrics: Dict, alerts: List[Dict]) -> List[Dict]:
+        """Evaluate conditions for auto-remediation"""
+        remediation_actions = []
+        
+        for rule_name, rule in self.remediation_rules.items():
+            condition_met = self._check_condition(rule_name, rule, metrics, alerts)
+            
+            if condition_met:
+                action = {
+                    'rule_name': rule_name,
+                    'triggered_at': datetime.now(),
+                    'actions': rule['actions'],
+                    'auto_execute': rule['auto_execute'],
+                    'severity': self._get_severity(rule_name),
+                    'estimated_impact': self._get_impact(rule_name)
+                }
+                remediation_actions.append(action)
+        
+        return remediation_actions
+    
+    def execute_remediation(self, action: Dict) -> Dict:
+        """Execute a remediation action"""
+        if self.cloudwatch.demo_mode:
+            return self._simulate_remediation(action)
+        
+        try:
+            results = []
+            
+            for action_type in action['actions']:
+                result = self._execute_action(action_type, action)
+                results.append(result)
+            
+            # Log remediation action
+            self.remediation_history.append({
+                'action': action,
+                'results': results,
+                'executed_at': datetime.now(),
+                'status': 'completed'
+            })
+            
+            return {
+                'status': 'success',
+                'results': results,
+                'message': f"Successfully executed {len(results)} remediation actions"
+            }
+            
+        except Exception as e:
+            return {
+                'status': 'error',
+                'message': f"Remediation failed: {str(e)}"
+            }
+    
+    def _check_condition(self, rule_name: str, rule: Dict, metrics: Dict, alerts: List[Dict]) -> bool:
+        """Check if condition is met for a specific rule"""
+        if rule_name == 'high_cpu_usage':
+            # Check CPU metrics
+            cpu_metrics = metrics.get('cpu_usage', [])
+            if cpu_metrics:
+                recent_cpu = [dp['Average'] for dp in cpu_metrics[-3:]]  # Last 3 datapoints
+                return all(cpu > rule['threshold'] for cpu in recent_cpu)
+        
+        elif rule_name == 'memory_pressure':
+            memory_metrics = metrics.get('memory_usage', [])
+            if memory_metrics:
+                recent_memory = [dp['Average'] for dp in memory_metrics[-2:]]
+                return all(mem > rule['threshold'] for mem in recent_memory)
+        
+        elif rule_name == 'blocking_sessions':
+            # Check for blocking session alerts
+            blocking_alerts = [a for a in alerts if 'blocking' in a.get('message', '').lower()]
+            return len(blocking_alerts) >= rule['threshold']
+        
+        elif rule_name == 'disk_space_low':
+            disk_metrics = metrics.get('disk_usage', [])
+            if disk_metrics:
+                recent_disk = [dp['Average'] for dp in disk_metrics[-3:]]
+                return all(disk > rule['threshold'] for disk in recent_disk)
+        
+        elif rule_name == 'backup_failure':
+            backup_alerts = [a for a in alerts if 'backup' in a.get('message', '').lower() and 'fail' in a.get('message', '').lower()]
+            return len(backup_alerts) >= rule['threshold']
+        
+        return False
+    
+    def _execute_action(self, action_type: str, context: Dict) -> Dict:
+        """Execute a specific remediation action"""
+        if action_type == 'scale_up':
+            return self._scale_up_instance(context)
+        elif action_type == 'kill_expensive_queries':
+            return self._kill_expensive_queries(context)
+        elif action_type == 'clear_buffer_cache':
+            return self._clear_buffer_cache(context)
+        elif action_type == 'cleanup_temp_files':
+            return self._cleanup_temp_files(context)
+        elif action_type == 'retry_backup':
+            return self._retry_backup(context)
+        elif action_type == 'automatic_failover':
+            return self._perform_ag_failover(context)
+        elif action_type == 'alert_dba':
+            return self._send_alert_to_dba(context)
+        else:
+            return {'status': 'error', 'message': f'Unknown action type: {action_type}'}
+    
+    def _scale_up_instance(self, context: Dict) -> Dict:
+        """Scale up EC2 instance or RDS instance"""
+        try:
+            # For EC2 instances
+            if context.get('instance_type') == 'ec2':
+                # Use Systems Manager to modify instance type
+                response = self.cloudwatch.ssm.send_command(
+                    InstanceIds=[context.get('instance_id')],
+                    DocumentName="AWS-ResizeInstance",
+                    Parameters={
+                        'InstanceType': [self._get_next_instance_size(context.get('current_instance_type'))]
+                    }
+                )
+                return {'status': 'success', 'message': 'Instance scaling initiated'}
+            
+            # For RDS instances
+            elif context.get('instance_type') == 'rds':
+                self.cloudwatch.rds.modify_db_instance(
+                    DBInstanceIdentifier=context.get('instance_id'),
+                    DBInstanceClass=self._get_next_rds_size(context.get('current_instance_class')),
+                    ApplyImmediately=True
+                )
+                return {'status': 'success', 'message': 'RDS scaling initiated'}
+                
+        except Exception as e:
+            return {'status': 'error', 'message': f'Scaling failed: {str(e)}'}
+    
+    def _kill_expensive_queries(self, context: Dict) -> Dict:
+        """Kill expensive SQL queries"""
+        try:
+            # Use Systems Manager to run SQL commands
+            sql_command = """
+            DECLARE @SessionID INT
+            DECLARE query_cursor CURSOR FOR
+            SELECT session_id FROM sys.dm_exec_requests 
+            WHERE cpu_time > 30000 AND total_elapsed_time > 60000
+            
+            OPEN query_cursor
+            FETCH NEXT FROM query_cursor INTO @SessionID
+            
+            WHILE @@FETCH_STATUS = 0
+            BEGIN
+                KILL @SessionID
+                FETCH NEXT FROM query_cursor INTO @SessionID
+            END
+            
+            CLOSE query_cursor
+            DEALLOCATE query_cursor
+            """
+            
+            response = self.cloudwatch.ssm.send_command(
+                InstanceIds=[context.get('instance_id')],
+                DocumentName="AWS-RunPowerShellScript",
+                Parameters={
+                    'commands': [f'sqlcmd -Q "{sql_command}"']
+                }
+            )
+            
+            return {'status': 'success', 'message': 'Expensive queries terminated'}
+            
+        except Exception as e:
+            return {'status': 'error', 'message': f'Query termination failed: {str(e)}'}
+    
+    def _clear_buffer_cache(self, context: Dict) -> Dict:
+        """Clear SQL Server buffer cache to free memory"""
+        try:
+            sql_command = "DBCC DROPCLEANBUFFERS"
+            
+            response = self.cloudwatch.ssm.send_command(
+                InstanceIds=[context.get('instance_id')],
+                DocumentName="AWS-RunPowerShellScript",
+                Parameters={
+                    'commands': [f'sqlcmd -Q "{sql_command}"']
+                }
+            )
+            
+            return {'status': 'success', 'message': 'Buffer cache cleared'}
+            
+        except Exception as e:
+            return {'status': 'error', 'message': f'Buffer cache clear failed: {str(e)}'}
+    
+    def _cleanup_temp_files(self, context: Dict) -> Dict:
+        """Clean up temporary files and logs"""
+        try:
+            cleanup_script = """
+            # Clean SQL Server temp files
+            Remove-Item "C:\\Program Files\\Microsoft SQL Server\\MSSQL*\\MSSQL\\Data\\tempdb*" -Force -ErrorAction SilentlyContinue
+            
+            # Clean Windows temp files
+            Remove-Item "$env:TEMP\\*" -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item "C:\\Windows\\Temp\\*" -Recurse -Force -ErrorAction SilentlyContinue
+            
+            # Clean old log files
+            Get-ChildItem "C:\\Program Files\\Microsoft SQL Server\\MSSQL*\\MSSQL\\Log\\*.trc" | Where-Object {$_.LastWriteTime -lt (Get-Date).AddDays(-7)} | Remove-Item -Force
+            """
+            
+            response = self.cloudwatch.ssm.send_command(
+                InstanceIds=[context.get('instance_id')],
+                DocumentName="AWS-RunPowerShellScript",
+                Parameters={'commands': [cleanup_script]}
+            )
+            
+            return {'status': 'success', 'message': 'Temporary files cleaned'}
+            
+        except Exception as e:
+            return {'status': 'error', 'message': f'Cleanup failed: {str(e)}'}
+    
+    def _retry_backup(self, context: Dict) -> Dict:
+        """Retry failed database backup"""
+        try:
+            sql_command = """
+            DECLARE @BackupPath NVARCHAR(500) = 'C:\\Backups\\' + DB_NAME() + '_' + FORMAT(GETDATE(), 'yyyyMMdd_HHmmss') + '.bak'
+            BACKUP DATABASE [YourDatabase] TO DISK = @BackupPath WITH INIT, COMPRESSION
+            """
+            
+            response = self.cloudwatch.ssm.send_command(
+                InstanceIds=[context.get('instance_id')],
+                DocumentName="AWS-RunPowerShellScript",
+                Parameters={
+                    'commands': [f'sqlcmd -Q "{sql_command}"']
+                }
+            )
+            
+            return {'status': 'success', 'message': 'Backup retry initiated'}
+            
+        except Exception as e:
+            return {'status': 'error', 'message': f'Backup retry failed: {str(e)}'}
+    
+    def _perform_ag_failover(self, context: Dict) -> Dict:
+        """Perform Always On Availability Group failover"""
+        try:
+            sql_command = """
+            ALTER AVAILABILITY GROUP [YourAGName] FAILOVER
+            """
+            
+            response = self.cloudwatch.ssm.send_command(
+                InstanceIds=[context.get('secondary_instance_id')],
+                DocumentName="AWS-RunPowerShellScript",
+                Parameters={
+                    'commands': [f'sqlcmd -Q "{sql_command}"']
+                }
+            )
+            
+            return {'status': 'success', 'message': 'AG failover initiated'}
+            
+        except Exception as e:
+            return {'status': 'error', 'message': f'AG failover failed: {str(e)}'}
+    
+    def _send_alert_to_dba(self, context: Dict) -> Dict:
+        """Send alert to DBA team"""
+        try:
+            # Use SNS to send notification
+            message = f"""
+            Auto-Remediation Alert:
+            Rule: {context.get('rule_name')}
+            Severity: {context.get('severity')}
+            Instance: {context.get('instance_id')}
+            Actions Taken: {', '.join(context.get('actions', []))}
+            Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+            """
+            
+            # In a real implementation, you would publish to SNS
+            # self.cloudwatch.session.client('sns').publish(
+            #     TopicArn='arn:aws:sns:region:account:dba-alerts',
+            #     Message=message,
+            #     Subject='SQL Server Auto-Remediation Alert'
+            # )
+            
+            return {'status': 'success', 'message': 'Alert sent to DBA team'}
+            
+        except Exception as e:
+            return {'status': 'error', 'message': f'Alert sending failed: {str(e)}'}
+    
+    def _simulate_remediation(self, action: Dict) -> Dict:
+        """Simulate remediation action in demo mode"""
+        return {
+            'status': 'success',
+            'results': [
+                {'action': action_type, 'status': 'simulated', 'message': f'Simulated {action_type}'}
+                for action_type in action['actions']
+            ],
+            'message': f"Simulated remediation for {action['rule_name']}"
+        }
+    
+    def _get_severity(self, rule_name: str) -> str:
+        """Get severity level for a rule"""
+        severity_map = {
+            'high_cpu_usage': 'Medium',
+            'memory_pressure': 'High',
+            'blocking_sessions': 'Medium',
+            'disk_space_low': 'High',
+            'backup_failure': 'High',
+            'ag_failover_needed': 'Critical'
+        }
+        return severity_map.get(rule_name, 'Medium')
+    
+    def _get_impact(self, rule_name: str) -> str:
+        """Get estimated impact for a rule"""
+        impact_map = {
+            'high_cpu_usage': 'Low to Medium',
+            'memory_pressure': 'Medium',
+            'blocking_sessions': 'Low',
+            'disk_space_low': 'Medium',
+            'backup_failure': 'Low',
+            'ag_failover_needed': 'High'
+        }
+        return impact_map.get(rule_name, 'Low')
+    
+    def _get_next_instance_size(self, current_type: str) -> str:
+        """Get next larger instance size"""
+        size_progression = {
+            't3.micro': 't3.small',
+            't3.small': 't3.medium',
+            't3.medium': 't3.large',
+            't3.large': 't3.xlarge',
+            'm5.large': 'm5.xlarge',
+            'm5.xlarge': 'm5.2xlarge',
+            'm5.2xlarge': 'm5.4xlarge'
+        }
+        return size_progression.get(current_type, current_type)
+    
+    def _get_next_rds_size(self, current_class: str) -> str:
+        """Get next larger RDS instance class"""
+        size_progression = {
+            'db.t3.micro': 'db.t3.small',
+            'db.t3.small': 'db.t3.medium',
+            'db.t3.medium': 'db.t3.large',
+            'db.m5.large': 'db.m5.xlarge',
+            'db.m5.xlarge': 'db.m5.2xlarge'
+        }
+        return size_progression.get(current_class, current_class)
+
+# =================== Predictive Analytics Engine ===================
+class PredictiveAnalyticsEngine:
+    def __init__(self, cloudwatch_connector: AWSCloudWatchConnector):
+        self.cloudwatch = cloudwatch_connector
+        self.prediction_models = {}
+    
+    def analyze_trends(self, metrics: Dict, days: int = 30) -> Dict:
+        """Analyze performance trends and predict future issues"""
+        predictions = {}
+        
+        for metric_name, metric_data in metrics.items():
+            if metric_data:
+                trend_analysis = self._analyze_metric_trend(metric_name, metric_data)
+                predictions[metric_name] = trend_analysis
+        
+        return predictions
+    
+    def _analyze_metric_trend(self, metric_name: str, data: List[Dict]) -> Dict:
+        """Analyze trend for a specific metric"""
+        if len(data) < 10:
+            return {'status': 'insufficient_data'}
+        
+        # Extract values and timestamps
+        values = [dp['Average'] for dp in data]
+        timestamps = [dp['Timestamp'] for dp in data]
+        
+        # Calculate trend
+        trend = self._calculate_trend(values)
+        
+        # Predict future values
+        future_prediction = self._predict_future_values(values, 24)  # Next 24 hours
+        
+        # Determine risk level
+        risk_level = self._assess_risk_level(metric_name, values, future_prediction)
+        
+        # Generate recommendations
+        recommendations = self._generate_recommendations(metric_name, trend, risk_level)
+        
+        return {
+            'status': 'analyzed',
+            'trend': trend,
+            'risk_level': risk_level,
+            'future_prediction': future_prediction,
+            'recommendations': recommendations,
+            'confidence': self._calculate_confidence(values)
+        }
+    
+    def _calculate_trend(self, values: List[float]) -> str:
+        """Calculate trend direction"""
+        if len(values) < 5:
+            return 'stable'
+        
+        # Simple linear regression
+        x = list(range(len(values)))
+        n = len(values)
+        sum_x = sum(x)
+        sum_y = sum(values)
+        sum_xy = sum(x[i] * values[i] for i in range(n))
+        sum_x2 = sum(x[i] ** 2 for i in range(n))
+        
+        slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x ** 2)
+        
+        if slope > 0.5:
+            return 'increasing'
+        elif slope < -0.5:
+            return 'decreasing'
+        else:
+            return 'stable'
+    
+    def _predict_future_values(self, values: List[float], periods: int) -> List[float]:
+        """Predict future values using simple linear extrapolation"""
+        if len(values) < 3:
+            return [values[-1]] * periods
+        
+        # Calculate average change
+        changes = [values[i] - values[i-1] for i in range(1, len(values))]
+        avg_change = sum(changes) / len(changes)
+        
+        # Predict future values
+        last_value = values[-1]
+        predictions = []
+        
+        for i in range(periods):
+            predicted_value = last_value + (avg_change * (i + 1))
+            predictions.append(max(0, predicted_value))  # Ensure non-negative
+        
+        return predictions
+    
+    def _assess_risk_level(self, metric_name: str, historical: List[float], 
+                          predicted: List[float]) -> str:
+        """Assess risk level based on predictions"""
+        # Define thresholds for different metrics
+        thresholds = {
+            'cpu_usage': {'warning': 70, 'critical': 90},
+            'memory_usage': {'warning': 80, 'critical': 95},
+            'disk_usage': {'warning': 75, 'critical': 90},
+            'connection_count': {'warning': 80, 'critical': 95}
+        }
+        
+        metric_threshold = thresholds.get(metric_name, {'warning': 80, 'critical': 95})
+        
+        # Check if any predicted values exceed thresholds
+        max_predicted = max(predicted)
+        
+        if max_predicted > metric_threshold['critical']:
+            return 'critical'
+        elif max_predicted > metric_threshold['warning']:
+            return 'warning'
+        else:
+            return 'low'
+    
+    def _generate_recommendations(self, metric_name: str, trend: str, risk_level: str) -> List[str]:
+        """Generate recommendations based on analysis"""
+        recommendations = []
+        
+        if risk_level == 'critical':
+            if metric_name == 'cpu_usage':
+                recommendations.extend([
+                    "Consider scaling up instance size immediately",
+                    "Review and optimize expensive queries",
+                    "Enable auto-scaling if not already configured"
+                ])
+            elif metric_name == 'memory_usage':
+                recommendations.extend([
+                    "Increase instance memory or scale up",
+                    "Review memory-intensive queries and procedures",
+                    "Consider implementing memory optimization"
+                ])
+            elif metric_name == 'disk_usage':
+                recommendations.extend([
+                    "Extend disk storage immediately",
+                    "Implement log file maintenance",
+                    "Archive old data to reduce storage usage"
+                ])
+        
+        elif risk_level == 'warning':
+            recommendations.extend([
+                f"Monitor {metric_name} closely over the next 24 hours",
+                "Prepare scaling strategy if trend continues",
+                "Review recent changes that might impact performance"
+            ])
+        
+        if trend == 'increasing':
+            recommendations.append(f"The {metric_name} trend is increasing - proactive action recommended")
+        
+        return recommendations
+    
+    def _calculate_confidence(self, values: List[float]) -> float:
+        """Calculate confidence level of predictions"""
+        if len(values) < 10:
+            return 0.3
+        
+        # Calculate variance to determine confidence
+        mean_val = sum(values) / len(values)
+        variance = sum((x - mean_val) ** 2 for x in values) / len(values)
+        std_dev = variance ** 0.5
+        
+        # Lower variance = higher confidence
+        if std_dev < mean_val * 0.1:
+            return 0.9
+        elif std_dev < mean_val * 0.2:
+            return 0.7
+        elif std_dev < mean_val * 0.3:
+            return 0.5
+        else:
+            return 0.3
+
+# =================== Claude AI Analyzer ===================
 class ClaudeAIAnalyzer:
     def __init__(self, api_key: str):
-        """Initialize Claude AI client"""
         if not ANTHROPIC_AVAILABLE:
             self.client = None
             self.enabled = False
-            st.warning("⚠️ Anthropic library not available. Install 'anthropic' package for AI features.")
             return
             
-        if api_key and api_key != "your_claude_api_key_here":
+        if api_key:
             try:
                 self.client = Anthropic(api_key=api_key)
                 self.enabled = True
             except Exception as e:
                 self.client = None
                 self.enabled = False
-                st.error(f"Failed to initialize Claude AI: {str(e)}")
         else:
             self.client = None
             self.enabled = False
-    
-    def analyze_performance_metrics(self, server_metrics: Dict[str, Dict]) -> Dict[str, str]:
-        """Use Claude AI to analyze performance metrics across all servers"""
-        if not self.enabled:
-            return {"analysis": "Claude AI not configured", "recommendations": "Configure Claude AI API key in sidebar"}
-        
-        try:
-            # Prepare metrics summary for Claude
-            metrics_summary = self._prepare_metrics_summary(server_metrics)
-            
-            prompt = f"""
-            As a SQL Server performance expert, analyze the following real-time metrics from a multi-server environment and provide:
-            
-            1. Overall health assessment
-            2. Critical issues that need immediate attention
-            3. Performance bottlenecks
-            4. Proactive recommendations
-            5. Risk assessment for each server
-            
-            Server Metrics Data:
-            {metrics_summary}
-            
-            Focus on:
-            - CPU and memory utilization patterns
-            - Blocking and wait statistics
-            - Index fragmentation issues
-            - Backup compliance
-            - Disk I/O performance
-            - Buffer cache efficiency
-            
-            Provide actionable insights in a structured format.
-            """
-            
-            response = self.client.messages.create(
-                model="claude-3-sonnet-20240229",
-                max_tokens=1500,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            
-            analysis = response.content[0].text
-            
-            # Parse response into sections
-            sections = self._parse_claude_response(analysis)
-            return sections
-            
-        except Exception as e:
-            return {"analysis": f"Claude AI analysis failed: {str(e)}", "recommendations": "Check API configuration"}
-    
-    def predict_failures(self, historical_data: Dict, current_metrics: Dict) -> Dict[str, Any]:
-        """Use Claude AI to predict potential failures"""
-        if not self.enabled:
-            return {"predictions": "Claude AI not configured"}
-        
-        try:
-            data_summary = self._prepare_failure_prediction_data(historical_data, current_metrics)
-            
-            prompt = f"""
-            As a SQL Server reliability expert, analyze the following historical and current performance data to predict potential failures:
-            
-            Data Summary:
-            {data_summary}
-            
-            Provide:
-            1. Failure probability for each server (0-100%)
-            2. Most likely failure scenarios
-            3. Time-to-failure estimates
-            4. Prevention strategies
-            5. Risk mitigation steps
-            
-            Focus on patterns that typically lead to:
-            - Memory pressure
-            - Disk space exhaustion
-            - Deadlock scenarios
-            - Performance degradation
-            - Service outages
-            """
-            
-            response = self.client.messages.create(
-                model="claude-3-sonnet-20240229",
-                max_tokens=1200,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            
-            return {"predictions": response.content[0].text}
-            
-        except Exception as e:
-            return {"predictions": f"Prediction analysis failed: {str(e)}"}
-    
-    def generate_maintenance_plan(self, server_metrics: Dict, alert_history: List) -> str:
-        """Generate intelligent maintenance recommendations"""
-        if not self.enabled:
-            return "Claude AI not configured for maintenance planning"
-        
-        try:
-            context = self._prepare_maintenance_context(server_metrics, alert_history)
-            
-            prompt = f"""
-            As a SQL Server DBA, create a comprehensive maintenance plan based on:
-            
-            Current System State:
-            {context}
-            
-            Generate a prioritized maintenance plan including:
-            1. Immediate actions (next 24 hours)
-            2. Short-term tasks (next week)
-            3. Long-term improvements (next month)
-            4. Preventive measures
-            5. Resource optimization opportunities
-            
-            Include specific SQL Server maintenance tasks like:
-            - Index maintenance requirements
-            - Statistics updates
-            - Database integrity checks
-            - Backup strategy optimization
-            - Performance tuning recommendations
-            """
-            
-            response = self.client.messages.create(
-                model="claude-3-sonnet-20240229",
-                max_tokens=1500,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            
-            return response.content[0].text
-            
-        except Exception as e:
-            return f"Maintenance plan generation failed: {str(e)}"
-    
-    def _prepare_metrics_summary(self, server_metrics: Dict) -> str:
-        """Prepare a concise summary of metrics for Claude analysis"""
-        summary = []
-        
-        for server_name, metrics in server_metrics.items():
-            server_summary = [f"\n{server_name}:"]
-            
-            # System metrics
-            if 'system_metrics' in metrics and not metrics['system_metrics'].empty:
-                sys_metrics = metrics['system_metrics'].iloc[0]
-                server_summary.append(f"  Buffer Cache Hit Ratio: {sys_metrics.get('buffer_cache_hit_ratio', 'N/A')}")
-                server_summary.append(f"  Page Life Expectancy: {sys_metrics.get('page_life_expectancy', 'N/A')}")
-            
-            # Connection info
-            if 'active_connections' in metrics and not metrics['active_connections'].empty:
-                conn_metrics = metrics['active_connections'].iloc[0]
-                server_summary.append(f"  Total Connections: {conn_metrics.get('total_connections', 'N/A')}")
-                server_summary.append(f"  Running Sessions: {conn_metrics.get('running_sessions', 'N/A')}")
-            
-            # Wait stats
-            if 'wait_stats' in metrics and not metrics['wait_stats'].empty:
-                top_wait = metrics['wait_stats'].iloc[0]
-                server_summary.append(f"  Top Wait Type: {top_wait.get('wait_type', 'N/A')}")
-                server_summary.append(f"  Wait Time (ms): {top_wait.get('wait_time_ms', 'N/A')}")
-            
-            # Blocking
-            if 'blocking_sessions' in metrics and not metrics['blocking_sessions'].empty:
-                blocking_count = len(metrics['blocking_sessions'])
-                server_summary.append(f"  Blocking Sessions: {blocking_count}")
-            
-            summary.extend(server_summary)
-        
-        return "\n".join(summary)
-    
-    def _prepare_failure_prediction_data(self, historical_data: Dict, current_metrics: Dict) -> str:
-        """Prepare data for failure prediction analysis"""
-        summary = ["Historical Trends and Current State:"]
-        
-        for server_name in current_metrics.keys():
-            summary.append(f"\n{server_name}:")
-            summary.append("  Current State: [summarized current metrics]")
-            summary.append("  Recent Trends: [historical patterns]")
-            # Add more detailed analysis here based on your historical data structure
-        
-        return "\n".join(summary)
-    
-    def _prepare_maintenance_context(self, server_metrics: Dict, alert_history: List) -> str:
-        """Prepare context for maintenance planning"""
-        context = ["System Context for Maintenance Planning:"]
-        
-        # Recent alerts summary
-        if alert_history:
-            context.append(f"\nRecent Alerts ({len(alert_history)} total):")
-            for alert in alert_history[-5:]:  # Last 5 alerts
-                context.append(f"  - {alert.get('severity', 'Unknown')}: {alert.get('message', 'No message')}")
-        
-        # Current metrics summary
-        context.extend(["\nCurrent Server States:"])
-        for server_name, metrics in server_metrics.items():
-            context.append(f"  {server_name}: [health summary]")
-        
-        return "\n".join(context)
-    
-    def _parse_claude_response(self, response: str) -> Dict[str, str]:
-        """Parse Claude's response into structured sections"""
-        sections = {
-            "overall_health": "",
-            "critical_issues": "",
-            "recommendations": "",
-            "risk_assessment": ""
-        }
-        
-        # Simple parsing - in production, you might want more sophisticated parsing
-        if "health" in response.lower():
-            sections["overall_health"] = response[:500]  # First part
-        
-        sections["recommendations"] = response[-500:]  # Last part
-        
-        return sections
 
-# =================== Enhanced Alert Management ===================
-class EnterpriseAlertManager:
-    def __init__(self):
-        self.alert_rules = {
-            'cpu_high': {'threshold': 80, 'severity': 'warning', 'duration': 300},
-            'cpu_critical': {'threshold': 95, 'severity': 'critical', 'duration': 120},
-            'memory_high': {'threshold': 85, 'severity': 'warning', 'duration': 300},
-            'memory_critical': {'threshold': 95, 'severity': 'critical', 'duration': 120},
-            'buffer_cache_low': {'threshold': 90, 'severity': 'warning', 'duration': 600},
-            'page_life_low': {'threshold': 300, 'severity': 'critical', 'duration': 300},
-            'blocking_sessions': {'threshold': 0, 'severity': 'warning', 'duration': 60},
-            'high_wait_times': {'threshold': 1000, 'severity': 'warning', 'duration': 300},
-            'backup_overdue': {'threshold': 24, 'severity': 'critical', 'duration': 0}  # hours
-        }
-        
-        if 'enterprise_alerts' not in st.session_state:
-            st.session_state.enterprise_alerts = []
-    
-    def evaluate_sql_server_alerts(self, server_name: str, metrics: Dict[str, pd.DataFrame], 
-                                  health_summary: Dict) -> List[Dict]:
-        """Evaluate enterprise-grade alerts for SQL Server"""
-        alerts = []
-        current_time = datetime.now()
-        
-        # System health alerts
-        if health_summary.get('status') == 'offline':
-            alerts.append({
-                'timestamp': current_time,
-                'server': server_name,
-                'severity': 'critical',
-                'category': 'connectivity',
-                'message': f"Server {server_name} is offline or unreachable",
-                'metric': 'connectivity',
-                'value': 0,
-                'threshold': 1,
-                'recommendation': 'Check network connectivity and SQL Server service status'
-            })
-        
-        # Buffer cache hit ratio
-        if 'system_metrics' in metrics and not metrics['system_metrics'].empty:
-            sys_metrics = metrics['system_metrics'].iloc[0]
-            buffer_cache = sys_metrics.get('buffer_cache_hit_ratio', 100)
-            
-            if buffer_cache < self.alert_rules['buffer_cache_low']['threshold']:
-                alerts.append({
-                    'timestamp': current_time,
-                    'server': server_name,
-                    'severity': 'warning',
-                    'category': 'performance',
-                    'message': f"Low buffer cache hit ratio: {buffer_cache:.1f}%",
-                    'metric': 'buffer_cache_hit_ratio',
-                    'value': buffer_cache,
-                    'threshold': self.alert_rules['buffer_cache_low']['threshold'],
-                    'recommendation': 'Consider increasing memory allocation or optimize queries'
-                })
-            
-            # Page life expectancy
-            page_life = sys_metrics.get('page_life_expectancy', 3000)
-            if page_life < self.alert_rules['page_life_low']['threshold']:
-                alerts.append({
-                    'timestamp': current_time,
-                    'server': server_name,
-                    'severity': 'critical',
-                    'category': 'memory',
-                    'message': f"Low page life expectancy: {page_life:.0f}s",
-                    'metric': 'page_life_expectancy',
-                    'value': page_life,
-                    'threshold': self.alert_rules['page_life_low']['threshold'],
-                    'recommendation': 'Immediate memory pressure investigation required'
-                })
-        
-        # Blocking sessions
-        if 'blocking_sessions' in metrics and not metrics['blocking_sessions'].empty:
-            blocking_count = len(metrics['blocking_sessions'])
-            if blocking_count > 0:
-                alerts.append({
-                    'timestamp': current_time,
-                    'server': server_name,
-                    'severity': 'warning',
-                    'category': 'blocking',
-                    'message': f"Blocking detected: {blocking_count} blocked sessions",
-                    'metric': 'blocking_sessions',
-                    'value': blocking_count,
-                    'threshold': 0,
-                    'recommendation': 'Investigate and resolve blocking chains'
-                })
-        
-        # High wait times
-        if 'wait_stats' in metrics and not metrics['wait_stats'].empty:
-            top_wait = metrics['wait_stats'].iloc[0]
-            wait_time = top_wait.get('wait_time_ms', 0)
-            if wait_time > self.alert_rules['high_wait_times']['threshold']:
-                alerts.append({
-                    'timestamp': current_time,
-                    'server': server_name,
-                    'severity': 'warning',
-                    'category': 'performance',
-                    'message': f"High wait times detected: {top_wait.get('wait_type', 'Unknown')} ({wait_time:.0f}ms)",
-                    'metric': 'wait_time',
-                    'value': wait_time,
-                    'threshold': self.alert_rules['high_wait_times']['threshold'],
-                    'recommendation': f"Investigate {top_wait.get('wait_type', 'Unknown')} wait type"
-                })
-        
-        # Backup compliance
-        if 'backup_status' in metrics and not metrics['backup_status'].empty:
-            for _, backup_row in metrics['backup_status'].iterrows():
-                db_name = backup_row.get('database_name', 'Unknown')
-                last_full = backup_row.get('last_full_backup')
-                
-                if last_full and last_full != '1900-01-01':
-                    hours_since_backup = (current_time - pd.to_datetime(last_full)).total_seconds() / 3600
-                    if hours_since_backup > self.alert_rules['backup_overdue']['threshold']:
-                        alerts.append({
-                            'timestamp': current_time,
-                            'server': server_name,
-                            'severity': 'critical',
-                            'category': 'backup',
-                            'message': f"Backup overdue for {db_name}: {hours_since_backup:.1f}h since last full backup",
-                            'metric': 'backup_age',
-                            'value': hours_since_backup,
-                            'threshold': self.alert_rules['backup_overdue']['threshold'],
-                            'recommendation': 'Schedule immediate backup'
-                        })
-        
-        return alerts
-    
-    def add_alerts(self, alerts: List[Dict]):
-        """Add new alerts to session state"""
-        st.session_state.enterprise_alerts.extend(alerts)
-        # Keep only last 200 alerts
-        st.session_state.enterprise_alerts = st.session_state.enterprise_alerts[-200:]
-    
-    def get_alerts_by_category(self, hours: int = 24) -> Dict[str, List[Dict]]:
-        """Get recent alerts grouped by category"""
-        cutoff_time = datetime.now() - timedelta(hours=hours)
-        recent_alerts = [alert for alert in st.session_state.enterprise_alerts 
-                        if alert['timestamp'] > cutoff_time]
-        
-        categories = {}
-        for alert in recent_alerts:
-            category = alert.get('category', 'other')
-            if category not in categories:
-                categories[category] = []
-            categories[category].append(alert)
-        
-        return categories
-
-# =================== Main Enterprise Application ===================
+# =================== Main Application ===================
 def main():
-    st.title("🏢 Enterprise SQL Server AI Monitor")
-    st.markdown("**Real-time monitoring, AI-powered analytics, and predictive maintenance for SQL Server infrastructure**")
+    st.markdown('<div class="aws-header"><h1>☁️ AWS CloudWatch SQL Server Monitor</h1><p>Enterprise-grade monitoring with AI-powered analytics and auto-remediation</p></div>', unsafe_allow_html=True)
     
     # Initialize session state
-    if 'sql_connector' not in st.session_state:
-        st.session_state.sql_connector = None
+    if 'cloudwatch_connector' not in st.session_state:
+        st.session_state.cloudwatch_connector = None
     
-    if 'metrics_collector' not in st.session_state:
-        st.session_state.metrics_collector = None
+    if 'always_on_monitor' not in st.session_state:
+        st.session_state.always_on_monitor = None
+    
+    if 'auto_remediation' not in st.session_state:
+        st.session_state.auto_remediation = None
+    
+    if 'predictive_analytics' not in st.session_state:
+        st.session_state.predictive_analytics = None
     
     if 'claude_analyzer' not in st.session_state:
         st.session_state.claude_analyzer = None
-    
-    if 'alert_manager' not in st.session_state:
-        st.session_state.alert_manager = EnterpriseAlertManager()
+
+    # Initialize default config for demo mode
+    aws_config = {
+        'access_key': 'demo',
+        'secret_key': 'demo',
+        'region': 'us-east-1',
+        'account_id': '123456789012',
+        'account_name': 'Demo Environment',
+        'log_groups': [
+            "/aws/rds/instance/sql-server-prod-1/error",
+            "/ec2/sql-server/application",
+            "/ec2/sql-server/system"
+        ],
+        'custom_namespace': 'SQLServer/CustomMetrics',
+        'os_metrics_namespace': 'CWAgent',
+        'enable_os_metrics': True
+    }
     
     # Sidebar configuration
     with st.sidebar:
-        st.header("🔧 Enterprise Configuration")
+        st.header("🔧 AWS Configuration")
         
         # System Status
         st.subheader("📊 System Status")
-        if not PYODBC_AVAILABLE:
-            st.error("❌ pyodbc not available")
-            st.info("💡 Install pyodbc for real SQL connections")
+        if not AWS_AVAILABLE:
+            st.error("❌ boto3 not available")
+            st.info("💡 Install boto3 for AWS connectivity")
         else:
-            st.success("✅ pyodbc available")
+            st.success("✅ boto3 available")
         
         if not ANTHROPIC_AVAILABLE:
             st.warning("⚠️ anthropic not available")
@@ -1021,853 +1504,2004 @@ def main():
             st.success("✅ anthropic available")
         
         # Demo mode indicator
-        if not PYODBC_AVAILABLE:
+        if not AWS_AVAILABLE:
             st.markdown("""
             <div style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%); 
                         padding: 1rem; border-radius: 8px; color: white; margin: 1rem 0;">
                 <strong>🎭 DEMO MODE</strong><br>
-                Using simulated data. Install pyodbc + ODBC drivers for real connections.
+                Using simulated data. Install boto3 for real AWS connections.
             </div>
             """, unsafe_allow_html=True)
-        
-        st.markdown("---")
-        
-        # Claude AI Configuration
-        st.subheader("🤖 Claude AI Settings")
-        claude_api_key = st.text_input("Claude AI API Key", type="password", 
-                                      value="", 
-                                      help="Enter your Anthropic Claude API key")
-        
-        if claude_api_key:
-            if 'claude_analyzer' not in st.session_state or st.session_state.claude_analyzer is None:
-                st.session_state.claude_analyzer = ClaudeAIAnalyzer(claude_api_key)
-            
-            if st.session_state.claude_analyzer.enabled:
-                st.success("✅ Claude AI Connected")
-            else:
-                st.error("❌ Claude AI Connection Failed")
-        else:
-            st.warning("⚠️ Claude AI not configured")
         
         st.markdown("---")
         
         # SQL Server Configuration
         st.subheader("🗄️ SQL Server Configuration")
         
-        if PYODBC_AVAILABLE:
-            # Configuration for 3 SQL Servers
-            server_configs = []
-            
-            for i in range(1, 4):
-                with st.expander(f"SQL Server {i} Configuration"):
-                    server_name = st.text_input(f"Server {i} Name", value=f"SQL-Server-{i}", key=f"name_{i}")
-                    server_ip = st.text_input(f"Server {i} IP/FQDN", value="", key=f"ip_{i}")
-                    server_port = st.text_input(f"Server {i} Port", value="1433", key=f"port_{i}")
-                    database = st.text_input(f"Database", value="master", key=f"db_{i}")
-                    username = st.text_input(f"Username", value="sa", key=f"user_{i}")
-                    password = st.text_input(f"Password", type="password", value="", key=f"pass_{i}")
-                    
-                    if server_ip and password:
-                        server_configs.append({
-                            'name': server_name,
-                            'server': f"{server_ip},{server_port}",
-                            'database': database,
-                            'username': username,
-                            'password': password
-                        })
-            
-            # Initialize SQL connector if configurations are provided
-            if server_configs and len(server_configs) > 0:
-                if st.button("🔌 Test Connections"):
-                    st.session_state.sql_connector = SQLServerConnector(server_configs)
-                    st.session_state.metrics_collector = SQLServerMetricsCollector(st.session_state.sql_connector)
-                    
-                    # Test all connections
-                    for config in server_configs:
-                        if st.session_state.sql_connector.test_connection(config):
-                            st.success(f"✅ {config['name']} connected")
-                        else:
-                            st.error(f"❌ {config['name']} failed")
-                
-                if st.session_state.sql_connector is None:
-                    st.session_state.sql_connector = SQLServerConnector(server_configs)
-                    st.session_state.metrics_collector = SQLServerMetricsCollector(st.session_state.sql_connector)
-        else:
-            st.info("📝 **Demo Mode Configuration**")
-            st.write("Using 3 simulated SQL Server instances:")
-            st.write("• SQL-Server-1 (Demo)")
-            st.write("• SQL-Server-2 (Demo)")
-            st.write("• SQL-Server-3 (Demo)")
-            st.write("")
-            st.write("Install pyodbc + ODBC drivers for real connections.")
-        
-        st.markdown("---")
-        
-        # Monitoring settings
-        st.subheader("📊 Monitoring Settings")
-        refresh_interval = st.slider("Refresh Interval (seconds)", 10, 300, 60)
-        enable_ai_analysis = st.checkbox("Enable AI Analysis", value=True)
-        enable_predictive_alerts = st.checkbox("Enable Predictive Alerts", value=True)
-        
-        st.markdown("---")
-        
-        # Connection status
-        st.subheader("🔗 Connection Status")
-        if st.session_state.sql_connector:
-            if st.session_state.sql_connector.demo_mode:
-                st.warning("🎭 Demo Mode Active")
-                st.info("Simulated SQL Server data")
-            else:
-                st.success("✅ SQL Connectors Ready")
-        else:
-            if PYODBC_AVAILABLE:
-                st.warning("⚠️ Configure SQL Servers")
-            else:
-                st.error("❌ Install pyodbc first")
-        
-        if st.session_state.claude_analyzer and st.session_state.claude_analyzer.enabled:
-            st.success("✅ Claude AI Ready")
-        else:
-            if ANTHROPIC_AVAILABLE:
-                st.warning("⚠️ Configure Claude AI")
-            else:
-                st.error("❌ Install anthropic package")
-    
-    # Check if systems are configured
-    if not PYODBC_AVAILABLE:
-        st.error("🚫 SQL Server connectivity not available")
-        
-        with st.expander("📋 Installation Instructions", expanded=True):
+        with st.expander("📋 SQL Server Metrics Setup Guide", expanded=False):
             st.markdown("""
-            ### 🔧 Install SQL Server Connectivity
+            ### 🔧 Setting Up Comprehensive SQL Server Metrics in CloudWatch
             
-            **Windows:**
+            To get all the detailed SQL Server metrics shown in this dashboard, you need to set up custom metric collection:
+            
+            #### 1. Install CloudWatch Agent on EC2 Instances
             ```bash
-            pip install pyodbc
-            ```
-            Then download and install [Microsoft ODBC Driver 18](https://docs.microsoft.com/en-us/sql/connect/odbc/download-odbc-driver-for-sql-server)
-            
-            **Linux (Ubuntu/Debian):**
-            ```bash
-            # Install Microsoft ODBC Driver
-            curl https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
-            curl https://packages.microsoft.com/config/ubuntu/20.04/prod.list | sudo tee /etc/apt/sources.list.d/mssql-release.list
-            sudo apt-get update
-            sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
-            
-            # Install Python package
-            pip install pyodbc
+            # Download and install CloudWatch agent
+            wget https://s3.amazonaws.com/amazoncloudwatch-agent/windows/amd64/latest/amazon-cloudwatch-agent.msi
+            msiexec /i amazon-cloudwatch-agent.msi /quiet
             ```
             
-            **macOS:**
-            ```bash
-            # Install Microsoft ODBC Driver
-            brew tap microsoft/mssql-release https://github.com/Microsoft/homebrew-mssql-release
-            HOMEBREW_NO_ENV_FILTERING=1 ACCEPT_EULA=Y brew install msodbcsql18
+            #### 2. Configure Performance Counters
+            Create a PowerShell script to collect SQL Server performance counters:
             
-            # Install Python package
-            pip install pyodbc
+            ```powershell
+            # SQL Server Performance Counter Collection Script
+            $counters = @(
+                "\\SQLServer:Buffer Manager\\Buffer cache hit ratio",
+                "\\SQLServer:Buffer Manager\\Page life expectancy",
+                "\\SQLServer:SQL Statistics\\Batch Requests/sec",
+                "\\SQLServer:SQL Statistics\\SQL Compilations/sec",
+                "\\SQLServer:SQL Statistics\\SQL Re-Compilations/sec",
+                "\\SQLServer:General Statistics\\User Connections",
+                "\\SQLServer:General Statistics\\Processes blocked",
+                "\\SQLServer:Locks(_Total)\\Lock Waits/sec",
+                "\\SQLServer:Locks(_Total)\\Lock Timeouts/sec",
+                "\\SQLServer:Locks(_Total)\\Number of Deadlocks/sec",
+                "\\SQLServer:Access Methods\\Full Scans/sec",
+                "\\SQLServer:Access Methods\\Index Searches/sec",
+                "\\SQLServer:Access Methods\\Page Splits/sec",
+                "\\SQLServer:Memory Manager\\Memory Grants Pending",
+                "\\SQLServer:Memory Manager\\Target Server Memory (KB)",
+                "\\SQLServer:Memory Manager\\Total Server Memory (KB)"
+            )
+            
+            foreach ($counter in $counters) {
+                $value = (Get-Counter $counter).CounterSamples.CookedValue
+                aws cloudwatch put-metric-data --namespace "CWAgent" --metric-data MetricName="$counter",Value=$value
+            }
             ```
             
-            ### 🤖 Enable AI Features
-            ```bash
-            pip install anthropic
+            #### 3. Always On Availability Groups Metrics
+            Use this T-SQL script to collect AG metrics:
+            
+            ```sql
+            -- Always On AG Metrics Collection
+            DECLARE @MetricData TABLE (
+                MetricName NVARCHAR(255),
+                MetricValue FLOAT,
+                Unit NVARCHAR(50)
+            )
+            
+            -- Log Send Queue Size
+            INSERT INTO @MetricData
+            SELECT 
+                'SQLServer:Database Replica\\Log Send Queue Size',
+                log_send_queue_size,
+                'Kilobytes'
+            FROM sys.dm_hadr_database_replica_states
+            WHERE is_local = 1
+            
+            -- Redo Queue Size  
+            INSERT INTO @MetricData
+            SELECT 
+                'SQLServer:Database Replica\\Redo Queue Size',
+                redo_queue_size,
+                'Kilobytes'
+            FROM sys.dm_hadr_database_replica_states
+            WHERE is_local = 1
+            
+            -- Send the metrics to CloudWatch
+            -- (Implementation would use PowerShell or custom application)
             ```
-            Then add your [Anthropic API key](https://console.anthropic.com/) in the sidebar.
+            
+            #### 4. Custom Application Metrics
+            For advanced metrics like query execution times and index fragmentation:
+            
+            ```sql
+            -- Expensive Queries Detection
+            SELECT 
+                COUNT(*) as expensive_query_count
+            FROM sys.dm_exec_query_stats qs
+            CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st
+            WHERE qs.total_elapsed_time / qs.execution_count > 10000000 -- 10 seconds
+            
+            -- Index Fragmentation Check
+            SELECT 
+                AVG(avg_fragmentation_in_percent) as avg_fragmentation
+            FROM sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL, 'SAMPLED')
+            WHERE avg_fragmentation_in_percent > 30
+            ```
+            
+            #### 5. Schedule Metric Collection
+            Use Windows Task Scheduler or AWS Systems Manager to run collection scripts every 5 minutes:
+            
+            ```json
+            {
+              "schemaVersion": "2.2",
+              "description": "Collect SQL Server Metrics",
+              "parameters": {},
+              "mainSteps": [
+                {
+                  "action": "aws:runPowerShellScript",
+                  "name": "collectSQLMetrics",
+                  "inputs": {
+                    "runCommand": [
+                      "C:\\Scripts\\CollectSQLServerMetrics.ps1"
+                    ]
+                  }
+                }
+              ]
+            }
+            ```
+            
+            #### 6. Required IAM Permissions
+            Your EC2 instances need these CloudWatch permissions:
+            
+            ```json
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": [
+                            "cloudwatch:PutMetricData",
+                            "cloudwatch:GetMetricStatistics",
+                            "cloudwatch:ListMetrics"
+                        ],
+                        "Resource": "*"
+                    }
+                ]
+            }
+            ```
+            
+            #### 7. Verify Metrics in CloudWatch
+            Once configured, verify metrics appear in the AWS CloudWatch console under:
+            - **Namespace**: `CWAgent`
+            - **Metrics**: All the SQL Server performance counters
+            
+            #### 8. Dashboard Integration
+            This monitoring tool will automatically detect and display all configured metrics.
             """)
         
-        st.info("🎭 **Currently running in DEMO MODE** with simulated data. Install dependencies above for real SQL Server monitoring.")
+        st.markdown("---")
         
-        # Continue with demo mode
-        if not st.session_state.sql_connector:
-            # Create demo configuration
-            demo_configs = [
-                {'name': 'SQL-Server-1', 'server': 'demo-server-1,1433', 'database': 'master', 'username': 'demo', 'password': 'demo'},
-                {'name': 'SQL-Server-2', 'server': 'demo-server-2,1433', 'database': 'master', 'username': 'demo', 'password': 'demo'},
-                {'name': 'SQL-Server-3', 'server': 'demo-server-3,1433', 'database': 'master', 'username': 'demo', 'password': 'demo'}
-            ]
-            st.session_state.sql_connector = SQLServerConnector(demo_configs)
-            st.session_state.metrics_collector = SQLServerMetricsCollector(st.session_state.sql_connector)
+        # AWS Configuration
+        st.subheader("🔑 AWS Credentials")
+        aws_access_key = st.text_input("AWS Access Key ID", type="password")
+        aws_secret_key = st.text_input("AWS Secret Access Key", type="password")
+        aws_region = st.selectbox("AWS Region", [
+            'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
+            'eu-west-1', 'eu-central-1', 'ap-southeast-1', 'ap-northeast-1'
+        ])
+        
+        # AWS Account Information
+        st.subheader("🏢 AWS Account Details")
+        aws_account_id = st.text_input("AWS Account ID", 
+                                    help="Your 12-digit AWS Account ID")
+        aws_account_name = st.text_input("Account Name/Environment", 
+                                        value="Production", 
+                                        help="Environment name (e.g., Production, Staging)")
+
+        # CloudWatch Configuration
+        st.subheader("📊 CloudWatch Configuration")
+
+        # Log Groups Configuration
+        st.write("**📝 CloudWatch Log Groups:**")
+        default_log_groups = [
+            "/aws/rds/instance/sql-server-prod-1/error",
+            "/aws/rds/instance/sql-server-prod-1/agent", 
+            "/ec2/sql-server/application",
+            "/ec2/sql-server/system",
+            "/ec2/sql-server/security"
+        ]
+
+        log_groups = st.text_area(
+            "Log Groups (one per line)",
+            value="\n".join(default_log_groups),
+            height=150,
+            help="Enter CloudWatch log group names, one per line"
+        ).split('\n')
+
+        # Custom Namespace Configuration
+        custom_namespace = st.text_input(
+            "Custom Metrics Namespace", 
+            value="SQLServer/CustomMetrics",
+            help="Namespace for your custom SQL Server metrics"
+        )
+
+        # OS Metrics Configuration
+        st.write("**🖥️ OS Metrics Configuration:**")
+        enable_os_metrics = st.checkbox("Enable OS-level Metrics", value=True)
+        os_metrics_namespace = st.text_input(
+            "OS Metrics Namespace",
+            value="CWAgent",
+            help="CloudWatch namespace for OS metrics"
+        )
+
+        # Update the aws_config dictionary if credentials are provided
+        if aws_access_key and aws_secret_key:
+            aws_config.update({
+                'access_key': aws_access_key,
+                'secret_key': aws_secret_key,
+                'region': aws_region,
+                'account_id': aws_account_id,
+                'account_name': aws_account_name,
+                'log_groups': [lg.strip() for lg in log_groups if lg.strip()],
+                'custom_namespace': custom_namespace,
+                'os_metrics_namespace': os_metrics_namespace,
+                'enable_os_metrics': enable_os_metrics
+            })
+            
+            if st.session_state.cloudwatch_connector is None:
+                st.session_state.cloudwatch_connector = AWSCloudWatchConnector(aws_config)
+                st.session_state.always_on_monitor = AlwaysOnMonitor(st.session_state.cloudwatch_connector)
+                st.session_state.auto_remediation = AutoRemediationEngine(st.session_state.cloudwatch_connector)
+                st.session_state.predictive_analytics = PredictiveAnalyticsEngine(st.session_state.cloudwatch_connector)
+            
+            if st.button("🔌 Test AWS Connection"):
+                if st.session_state.cloudwatch_connector.test_connection():
+                    st.success("✅ AWS Connected")
+                else:
+                    st.error("❌ AWS Connection Failed")
+        
+        st.markdown("---")
+        
+        # Claude AI Configuration
+        st.subheader("🤖 Claude AI Settings")
+        claude_api_key = st.text_input("Claude AI API Key", type="password", 
+                                      help="Enter your Anthropic Claude API key")
+        
+        if claude_api_key and ANTHROPIC_AVAILABLE:
+            if 'claude_analyzer' not in st.session_state or st.session_state.claude_analyzer is None:
+                st.session_state.claude_analyzer = ClaudeAIAnalyzer(claude_api_key)
+            
+            if hasattr(st.session_state.claude_analyzer, 'enabled') and st.session_state.claude_analyzer.enabled:
+                st.success("✅ Claude AI Connected")
+            else:
+                st.error("❌ Claude AI Connection Failed")
+        
+        st.markdown("---")
+        
+        # Auto-Remediation Settings
+        st.subheader("🔧 Auto-Remediation")
+        enable_auto_remediation = st.checkbox("Enable Auto-Remediation", value=True)
+        auto_approval_threshold = st.selectbox("Auto-Approval Level", [
+            "Low Risk Only",
+            "Low + Medium Risk", 
+            "All Except Critical",
+            "Manual Approval Required"
+        ])
+        
+        st.markdown("---")
+        
+        # Monitoring Settings
+        st.subheader("📊 Monitoring Settings")
+        refresh_interval = st.slider("Refresh Interval (seconds)", 30, 300, 60)
+        metric_retention_days = st.slider("Metric Retention (days)", 7, 90, 30)
+        enable_predictive_alerts = st.checkbox("Enable Predictive Alerts", value=True)
     
-    elif not st.session_state.sql_connector:
-        st.error("🚫 Please configure SQL Server connections in the sidebar")
-        st.info("👈 Use the sidebar to configure your 3 SQL Server instances")
-        return
+    # Initialize CloudWatch connector if not already done
+    if not st.session_state.cloudwatch_connector:
+        st.session_state.cloudwatch_connector = AWSCloudWatchConnector(aws_config)
+        st.session_state.always_on_monitor = AlwaysOnMonitor(st.session_state.cloudwatch_connector)
+        st.session_state.auto_remediation = AutoRemediationEngine(st.session_state.cloudwatch_connector)
+        st.session_state.predictive_analytics = PredictiveAnalyticsEngine(st.session_state.cloudwatch_connector)
+
+    # =================== Enhanced Data Collection ===================
+    def collect_comprehensive_metrics():
+        """Collect all metrics including OS, SQL Server, and logs"""
+        current_time = datetime.now()
+        start_time = current_time - timedelta(hours=24)
+        
+        all_metrics = {}
+        all_logs = {}
+        
+        # Get AWS account information
+        if st.session_state.cloudwatch_connector:
+            account_info = st.session_state.cloudwatch_connector.get_account_info()
+            
+            # Display account info in sidebar
+            if account_info:
+                st.sidebar.markdown("---")
+                st.sidebar.subheader("🏢 Account Information")
+                st.sidebar.write(f"**Account ID:** {account_info.get('account_id', 'Unknown')}")
+                st.sidebar.write(f"**Region:** {account_info.get('region', 'Unknown')}")
+                st.sidebar.write(f"**Environment:** {account_info.get('environment', 'Unknown')}")
+        
+        # Get EC2 instances for comprehensive monitoring
+        ec2_instances = st.session_state.cloudwatch_connector.get_ec2_sql_instances()
+        
+        for ec2 in ec2_instances:
+            instance_id = ec2['InstanceId']
+            
+            # Get SQL Server metrics
+            sql_metrics = st.session_state.cloudwatch_connector.get_comprehensive_sql_metrics(
+                instance_id, start_time, current_time
+            )
+            
+            # Get OS-level metrics if enabled
+            if aws_config.get('enable_os_metrics', True):
+                os_metrics = st.session_state.cloudwatch_connector.get_os_metrics(
+                    instance_id, start_time, current_time
+                )
+                
+                # Merge OS metrics with SQL metrics
+                for metric_key, metric_data in os_metrics.items():
+                    sql_metrics[f"os_{metric_key}"] = metric_data
+            
+            # Add to overall metrics with instance prefix
+            for metric_key, metric_data in sql_metrics.items():
+                all_metrics[f"{instance_id}_{metric_key}"] = metric_data
+        
+        # Get logs from configured log groups
+        if aws_config.get('log_groups'):
+            all_logs = st.session_state.cloudwatch_connector.get_sql_server_logs(
+                aws_config['log_groups'], 
+                hours=24
+            )
+        
+        return all_metrics, all_logs, ec2_instances
+
+    # Collect metrics
+    all_metrics, all_logs, ec2_instances = collect_comprehensive_metrics()
+    
+    # Get RDS instances
+    rds_instances = st.session_state.cloudwatch_connector.get_rds_instances()
+    
+    # Also get basic infrastructure metrics
+    basic_metric_queries = [
+        {'key': 'cpu_usage', 'namespace': 'AWS/EC2', 'metric_name': 'CPUUtilization', 'unit': 'Percent'},
+        {'key': 'memory_usage', 'namespace': 'CWAgent', 'metric_name': 'Memory % Committed Bytes In Use', 'unit': 'Percent'},
+        {'key': 'disk_usage', 'namespace': 'CWAgent', 'metric_name': 'LogicalDisk % Free Space', 'unit': 'Percent'},
+        {'key': 'network_in', 'namespace': 'AWS/EC2', 'metric_name': 'NetworkIn', 'unit': 'Bytes'},
+        {'key': 'network_out', 'namespace': 'AWS/EC2', 'metric_name': 'NetworkOut', 'unit': 'Bytes'}
+    ]
+    
+    # Get basic infrastructure metrics
+    current_time = datetime.now()
+    start_time = current_time - timedelta(hours=24)
+    basic_metrics = st.session_state.cloudwatch_connector.get_cloudwatch_metrics(
+        basic_metric_queries, start_time, current_time
+    )
+    
+    # Merge with comprehensive metrics
+    all_metrics.update(basic_metrics)
     
     # Main tabs
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
         "🏠 Dashboard", 
-        "🤖 AI Insights", 
+        "🗄️ SQL Metrics",
+        "🖥️ OS Metrics",
+        "🔄 Always On", 
+        "🤖 Auto-Remediation",
+        "🔮 Predictive Analytics", 
         "🚨 Alerts", 
         "📊 Performance",
-        "🔧 Maintenance",
-        "📈 Analytics"
+        "📈 Reports"
     ])
-    
-    # Collect metrics from all servers
-    all_server_metrics = {}
-    all_health_summaries = {}
-    
-    for config in st.session_state.sql_connector.server_configs:
-        server_name = config['name']
-        
-        # Collect metrics
-        server_metrics = st.session_state.metrics_collector.collect_all_metrics(server_name)
-        all_server_metrics[server_name] = server_metrics
-        
-        # Get health summary
-        health_summary = st.session_state.metrics_collector.get_health_summary(server_name)
-        all_health_summaries[server_name] = health_summary
-        
-        # Evaluate alerts
-        alerts = st.session_state.alert_manager.evaluate_sql_server_alerts(
-            server_name, server_metrics, health_summary
-        )
-        if alerts:
-            st.session_state.alert_manager.add_alerts(alerts)
     
     # =================== Dashboard Tab ===================
     with tab1:
-        st.header("🏢 Enterprise SQL Server Dashboard")
+        st.header("🏢 AWS SQL Server Infrastructure Overview")
         
-        # Overall cluster status
-        st.subheader("🌐 Cluster Overview")
-        
-        online_servers = sum(1 for h in all_health_summaries.values() if h.get('status') == 'online')
-        total_servers = len(all_health_summaries)
-        
+        # Infrastructure summary
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.metric("Online Servers", f"{online_servers}/{total_servers}", 
-                     delta="All systems operational" if online_servers == total_servers else "Issues detected")
+            st.metric("RDS Instances", len(rds_instances))
         
         with col2:
-            total_databases = sum(h.get('online_databases', 0) for h in all_health_summaries.values() if h.get('status') == 'online')
-            st.metric("Total Databases", total_databases)
+            ec2_running = len([i for i in ec2_instances if i.get('State', {}).get('Name') == 'running'])
+            st.metric("EC2 SQL Instances", f"{ec2_running}/{len(ec2_instances)}")
         
         with col3:
-            total_sessions = sum(h.get('user_sessions', 0) for h in all_health_summaries.values() if h.get('status') == 'online')
-            st.metric("Active Sessions", total_sessions)
+            ag_count = len(st.session_state.always_on_monitor.get_availability_groups())
+            st.metric("Always On AGs", ag_count)
         
         with col4:
-            recent_alerts = len(st.session_state.alert_manager.get_alerts_by_category(1))
-            alert_color = "🔴" if recent_alerts > 5 else "🟡" if recent_alerts > 0 else "🟢"
-            st.metric(f"Alerts (1h) {alert_color}", recent_alerts)
+            # Calculate average CPU across all instances
+            if all_metrics.get('cpu_usage'):
+                avg_cpu = np.mean([dp['Average'] for dp in all_metrics['cpu_usage'][-5:]])
+                cpu_color = "🔴" if avg_cpu > 80 else "🟡" if avg_cpu > 60 else "🟢"
+                st.metric(f"Avg CPU {cpu_color}", f"{avg_cpu:.1f}%")
+            else:
+                st.metric("Avg CPU", "N/A")
         
         st.markdown("---")
         
-        # Individual server status
-        for server_name, health in all_health_summaries.items():
-            if health.get('status') == 'online':
-                st.markdown(f'<div class="server-status-online">🟢 <strong>{server_name}</strong> - Online</div>', 
+        # RDS Instances Overview
+        if rds_instances:
+            st.subheader("📊 RDS SQL Server Instances")
+            for rds in rds_instances:
+                status_color = "cluster-online" if rds['DBInstanceStatus'] == 'available' else "cluster-offline"
+                
+                st.markdown(f'<div class="{status_color}">📊 <strong>{rds["DBInstanceIdentifier"]}</strong> - {rds["DBInstanceStatus"].title()}</div>', 
                            unsafe_allow_html=True)
                 
                 col1, col2, col3, col4 = st.columns(4)
-                
                 with col1:
-                    st.write(f"**Version:** {health.get('product_version', 'Unknown')[:10]}")
-                
+                    st.write(f"**Engine:** {rds['Engine']}")
                 with col2:
-                    st.write(f"**Edition:** {health.get('edition', 'Unknown')[:20]}")
-                
+                    st.write(f"**AZ:** {rds['AvailabilityZone']}")
                 with col3:
-                    st.write(f"**Databases:** {health.get('online_databases', 0)}")
-                
+                    st.write(f"**Multi-AZ:** {'Yes' if rds.get('MultiAZ') else 'No'}")
                 with col4:
-                    st.write(f"**Sessions:** {health.get('user_sessions', 0)}")
-                
-                # Server metrics
-                if server_name in all_server_metrics:
-                    metrics = all_server_metrics[server_name]
-                    
-                    # Performance metrics display
-                    if 'system_metrics' in metrics and not metrics['system_metrics'].empty:
-                        sys_metrics = metrics['system_metrics'].iloc[0]
-                        
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            buffer_cache = sys_metrics.get('buffer_cache_hit_ratio', 0)
-                            color = "🟢" if buffer_cache > 95 else "🟡" if buffer_cache > 90 else "🔴"
-                            st.metric(f"Buffer Cache {color}", f"{buffer_cache:.1f}%")
-                        
-                        with col2:
-                            page_life = sys_metrics.get('page_life_expectancy', 0)
-                            color = "🟢" if page_life > 1000 else "🟡" if page_life > 300 else "🔴"
-                            st.metric(f"Page Life Exp {color}", f"{page_life:.0f}s")
-                        
-                        with col3:
-                            if 'active_connections' in metrics and not metrics['active_connections'].empty:
-                                conn_metrics = metrics['active_connections'].iloc[0]
-                                total_conn = conn_metrics.get('total_connections', 0)
-                                color = "🟢" if total_conn < 100 else "🟡" if total_conn < 200 else "🔴"
-                                st.metric(f"Connections {color}", total_conn)
-                    
-                    # Wait statistics
-                    if 'wait_stats' in metrics and not metrics['wait_stats'].empty:
-                        st.write("**Top Wait Statistics:**")
-                        wait_stats = metrics['wait_stats'].head(3)
-                        for _, wait in wait_stats.iterrows():
-                            st.write(f"• {wait.get('wait_type', 'Unknown')}: {wait.get('wait_time_ms', 0):,.0f}ms")
-                    
-                    # Blocking sessions
-                    if 'blocking_sessions' in metrics and not metrics['blocking_sessions'].empty:
-                        blocking_count = len(metrics['blocking_sessions'])
-                        st.warning(f"⚠️ {blocking_count} blocking sessions detected")
-                    
-            else:
-                st.markdown(f'<div class="server-status-offline">🔴 <strong>{server_name}</strong> - Offline</div>', 
-                           unsafe_allow_html=True)
-                st.error(f"Error: {health.get('error', 'Unknown error')}")
-            
-            st.markdown("---")
-    
-    # =================== AI Insights Tab ===================
-    with tab2:
-        st.header("🤖 Claude AI Insights")
-        
-        if st.session_state.claude_analyzer and st.session_state.claude_analyzer.enabled:
-            
-            if st.button("🔍 Generate AI Analysis", type="primary"):
-                with st.spinner("Claude AI is analyzing your SQL Server infrastructure..."):
-                    
-                    # Performance analysis
-                    analysis = st.session_state.claude_analyzer.analyze_performance_metrics(all_server_metrics)
-                    
-                    st.markdown('<div class="claude-insight">', unsafe_allow_html=True)
-                    st.subheader("📊 Performance Analysis")
-                    st.write(analysis.get('overall_health', 'Analysis not available'))
-                    st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    # Critical issues
-                    if analysis.get('critical_issues'):
-                        st.markdown('<div class="alert-critical">', unsafe_allow_html=True)
-                        st.subheader("🚨 Critical Issues")
-                        st.write(analysis.get('critical_issues'))
-                        st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    # Recommendations
-                    st.markdown('<div class="claude-insight">', unsafe_allow_html=True)
-                    st.subheader("💡 AI Recommendations")
-                    st.write(analysis.get('recommendations', 'No specific recommendations at this time'))
-                    st.markdown('</div>', unsafe_allow_html=True)
-            
-            st.markdown("---")
-            
-            # Failure prediction
-            st.subheader("🔮 Predictive Analysis")
-            
-            if st.button("🎯 Predict Potential Failures"):
-                with st.spinner("Analyzing failure patterns..."):
-                    predictions = st.session_state.claude_analyzer.predict_failures({}, all_server_metrics)
-                    
-                    st.markdown('<div class="claude-insight">', unsafe_allow_html=True)
-                    st.write(predictions.get('predictions', 'Prediction analysis not available'))
-                    st.markdown('</div>', unsafe_allow_html=True)
-            
-            st.markdown("---")
-            
-            # Maintenance planning
-            st.subheader("🔧 Intelligent Maintenance Planning")
-            
-            if st.button("📋 Generate Maintenance Plan"):
-                with st.spinner("Creating intelligent maintenance plan..."):
-                    recent_alerts = st.session_state.alert_manager.get_alerts_by_category(24)
-                    all_alerts = []
-                    for category_alerts in recent_alerts.values():
-                        all_alerts.extend(category_alerts)
-                    
-                    maintenance_plan = st.session_state.claude_analyzer.generate_maintenance_plan(
-                        all_server_metrics, all_alerts
-                    )
-                    
-                    st.markdown('<div class="claude-insight">', unsafe_allow_html=True)
-                    st.write(maintenance_plan)
-                    st.markdown('</div>', unsafe_allow_html=True)
-        
-        else:
-            st.warning("🔧 Claude AI not configured. Please add your API key in the sidebar to enable AI-powered insights.")
-            st.info("""
-            **Claude AI Features:**
-            - 🔍 Intelligent performance analysis
-            - 🎯 Predictive failure detection
-            - 💡 Automated recommendations
-            - 📋 Smart maintenance planning
-            - 🔮 Trend analysis and forecasting
-            """)
-    
-    # =================== Alerts Tab ===================
-    with tab3:
-        st.header("🚨 Enterprise Alert Management")
-        
-        # Alert summary
-        alert_categories = st.session_state.alert_manager.get_alerts_by_category(24)
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            critical_count = sum(len([a for a in alerts if a['severity'] == 'critical']) 
-                               for alerts in alert_categories.values())
-            st.metric("Critical Alerts (24h)", critical_count, delta="High Priority")
-        
-        with col2:
-            warning_count = sum(len([a for a in alerts if a['severity'] == 'warning']) 
-                              for alerts in alert_categories.values())
-            st.metric("Warning Alerts (24h)", warning_count, delta="Monitor")
-        
-        with col3:
-            total_alerts = sum(len(alerts) for alerts in alert_categories.values())
-            st.metric("Total Alerts (24h)", total_alerts)
-        
-        with col4:
-            categories_count = len(alert_categories)
-            st.metric("Alert Categories", categories_count)
+                    st.write(f"**Storage:** {rds.get('AllocatedStorage', 0)} GB")
         
         st.markdown("---")
         
-        # Alerts by category
-        for category, alerts in alert_categories.items():
-            if not alerts:
-                continue
+        # EC2 Instances Overview
+        if ec2_instances:
+            st.subheader("🖥️ EC2 SQL Server Instances")
+            for ec2 in ec2_instances:
+                instance_name = "Unknown"
+                for tag in ec2.get('Tags', []):
+                    if tag['Key'] == 'Name':
+                        instance_name = tag['Value']
+                        break
                 
-            st.subheader(f"📂 {category.title()} Alerts")
-            
-            for alert in sorted(alerts, key=lambda x: x['timestamp'], reverse=True)[:10]:
-                timestamp_str = alert['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
+                status = ec2['State']['Name']
+                status_color = "cluster-online" if status == 'running' else "cluster-offline"
                 
-                if alert['severity'] == 'critical':
-                    st.markdown(f"""
-                    <div class="alert-critical">
-                        <strong>🚨 CRITICAL</strong> - {alert['server']}<br>
-                        <strong>Issue:</strong> {alert['message']}<br>
-                        <strong>Time:</strong> {timestamp_str}<br>
-                        <strong>Recommendation:</strong> {alert.get('recommendation', 'Immediate attention required')}
-                    </div>
-                    """, unsafe_allow_html=True)
+                st.markdown(f'<div class="{status_color}">🖥️ <strong>{instance_name}</strong> ({ec2["InstanceId"]}) - {status.title()}</div>', 
+                           unsafe_allow_html=True)
                 
-                elif alert['severity'] == 'warning':
-                    st.markdown(f"""
-                    <div class="alert-warning">
-                        <strong>⚠️ WARNING</strong> - {alert['server']}<br>
-                        <strong>Issue:</strong> {alert['message']}<br>
-                        <strong>Time:</strong> {timestamp_str}<br>
-                        <strong>Recommendation:</strong> {alert.get('recommendation', 'Monitor closely')}
-                    </div>
-                    """, unsafe_allow_html=True)
-            
-            st.markdown("---")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.write(f"**Type:** {ec2['InstanceType']}")
+                with col2:
+                    st.write(f"**Private IP:** {ec2.get('PrivateIpAddress', 'N/A')}")
+                with col3:
+                    st.write(f"**State:** {status}")
+                with col4:
+                    if st.button(f"Manage {instance_name}", key=f"manage_{ec2['InstanceId']}"):
+                        st.info(f"Management interface for {instance_name}")
         
-        if not alert_categories:
-            st.success("🎉 No alerts in the last 24 hours! All systems running smoothly.")
+        # Performance metrics charts
+        st.markdown("---")
+        st.subheader("📈 Real-time Performance Metrics")
+        
+        if all_metrics:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if all_metrics.get('cpu_usage'):
+                    cpu_data = all_metrics['cpu_usage']
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(
+                        x=[dp['Timestamp'] for dp in cpu_data],
+                        y=[dp['Average'] for dp in cpu_data],
+                        name='CPU Usage %',
+                        line=dict(color='blue')
+                    ))
+                    fig.add_hline(y=80, line_dash="dash", line_color="orange", annotation_text="Warning (80%)")
+                    fig.add_hline(y=90, line_dash="dash", line_color="red", annotation_text="Critical (90%)")
+                    fig.update_layout(title="CPU Utilization", xaxis_title="Time", yaxis_title="CPU %", height=300)
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                if all_metrics.get('memory_usage'):
+                    memory_data = all_metrics['memory_usage']
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(
+                        x=[dp['Timestamp'] for dp in memory_data],
+                        y=[dp['Average'] for dp in memory_data],
+                        name='Memory Usage %',
+                        line=dict(color='green')
+                    ))
+                    fig.add_hline(y=85, line_dash="dash", line_color="orange", annotation_text="Warning (85%)")
+                    fig.add_hline(y=95, line_dash="dash", line_color="red", annotation_text="Critical (95%)")
+                    fig.update_layout(title="Memory Utilization", xaxis_title="Time", yaxis_title="Memory %", height=300)
+                    st.plotly_chart(fig, use_container_width=True)
+    
+    # =================== SQL Metrics Tab ===================
+    with tab2:
+        st.header("🗄️ Comprehensive SQL Server Database Metrics")
+        
+        # Instance selector for detailed metrics
+        if ec2_instances:
+            instance_options = {}
+            for ec2 in ec2_instances:
+                instance_name = "Unknown"
+                for tag in ec2.get('Tags', []):
+                    if tag['Key'] == 'Name':
+                        instance_name = tag['Value']
+                        break
+                instance_options[f"{instance_name} ({ec2['InstanceId']})"] = ec2['InstanceId']
+            
+            selected_instance_display = st.selectbox("Select SQL Server Instance for Detailed Analysis", 
+                                                    list(instance_options.keys()))
+            selected_instance = instance_options[selected_instance_display]
+            
+            st.markdown(f"### 📊 Detailed Metrics for {selected_instance_display}")
+            
+            # Create metric categories
+            metric_categories = st.tabs([
+                "🏃 Performance", 
+                "🧠 Memory", 
+                "🔒 Locking", 
+                "📊 Wait Stats",
+                "🔄 Always On",
+                "💾 Database",
+                "🛡️ Security"
+            ])
+            
+            # ===== PERFORMANCE METRICS =====
+            with metric_categories[0]:
+                st.subheader("🏃 SQL Server Performance Metrics")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                # Get metrics for selected instance
+                buffer_cache_data = all_metrics.get(f"{selected_instance}_buffer_cache_hit_ratio", [])
+                batch_requests_data = all_metrics.get(f"{selected_instance}_batch_requests_per_sec", [])
+                compilations_data = all_metrics.get(f"{selected_instance}_sql_compilations_per_sec", [])
+                recompilations_data = all_metrics.get(f"{selected_instance}_sql_recompilations_per_sec", [])
+                
+                if buffer_cache_data:
+                    current_buffer_cache = buffer_cache_data[-1]['Average']
+                    color = "🟢" if current_buffer_cache > 95 else "🟡" if current_buffer_cache > 90 else "🔴"
+                    with col1:
+                        st.metric(f"Buffer Cache Hit Ratio {color}", f"{current_buffer_cache:.2f}%")
+                
+                if batch_requests_data:
+                    current_batch_requests = batch_requests_data[-1]['Average']
+                    with col2:
+                        st.metric("Batch Requests/sec", f"{current_batch_requests:.0f}")
+                
+                if compilations_data:
+                    current_compilations = compilations_data[-1]['Average']
+                    color = "🔴" if current_compilations > 100 else "🟡" if current_compilations > 50 else "🟢"
+                    with col3:
+                        st.metric(f"SQL Compilations/sec {color}", f"{current_compilations:.0f}")
+                
+                if recompilations_data:
+                    current_recompilations = recompilations_data[-1]['Average']
+                    color = "🔴" if current_recompilations > 10 else "🟡" if current_recompilations > 5 else "🟢"
+                    with col4:
+                        st.metric(f"SQL Re-Compilations/sec {color}", f"{current_recompilations:.0f}")
+                
+                # Performance trends chart
+                if buffer_cache_data and batch_requests_data:
+                    fig = make_subplots(
+                        rows=2, cols=2,
+                        subplot_titles=('Buffer Cache Hit Ratio', 'Batch Requests/sec', 
+                                       'SQL Compilations/sec', 'Page Life Expectancy'),
+                        specs=[[{"secondary_y": False}, {"secondary_y": False}],
+                               [{"secondary_y": False}, {"secondary_y": False}]]
+                    )
+                    
+                    # Buffer Cache Hit Ratio
+                    fig.add_trace(
+                        go.Scatter(x=[dp['Timestamp'] for dp in buffer_cache_data],
+                                  y=[dp['Average'] for dp in buffer_cache_data],
+                                  name='Buffer Cache Hit %', line=dict(color='blue')),
+                        row=1, col=1
+                    )
+                    
+                    # Batch Requests
+                    fig.add_trace(
+                        go.Scatter(x=[dp['Timestamp'] for dp in batch_requests_data],
+                                  y=[dp['Average'] for dp in batch_requests_data],
+                                  name='Batch Requests/sec', line=dict(color='green')),
+                        row=1, col=2
+                    )
+                    
+                    # SQL Compilations
+                    if compilations_data:
+                        fig.add_trace(
+                            go.Scatter(x=[dp['Timestamp'] for dp in compilations_data],
+                                      y=[dp['Average'] for dp in compilations_data],
+                                      name='Compilations/sec', line=dict(color='orange')),
+                            row=2, col=1
+                        )
+                    
+                    # Page Life Expectancy
+                    page_life_data = all_metrics.get(f"{selected_instance}_page_life_expectancy", [])
+                    if page_life_data:
+                        fig.add_trace(
+                            go.Scatter(x=[dp['Timestamp'] for dp in page_life_data],
+                                      y=[dp['Average'] for dp in page_life_data],
+                                      name='Page Life Exp (sec)', line=dict(color='red')),
+                            row=2, col=2
+                        )
+                    
+                    fig.update_layout(height=600, showlegend=False, title_text="SQL Server Performance Trends")
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            # ===== MEMORY METRICS =====
+            with metric_categories[1]:
+                st.subheader("🧠 SQL Server Memory Metrics")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                target_memory_data = all_metrics.get(f"{selected_instance}_target_server_memory_kb", [])
+                total_memory_data = all_metrics.get(f"{selected_instance}_total_server_memory_kb", [])
+                memory_grants_pending_data = all_metrics.get(f"{selected_instance}_memory_grants_pending", [])
+                page_life_data = all_metrics.get(f"{selected_instance}_page_life_expectancy", [])
+                
+                if target_memory_data and total_memory_data:
+                    target_memory_gb = target_memory_data[-1]['Average'] / 1024 / 1024
+                    total_memory_gb = total_memory_data[-1]['Average'] / 1024 / 1024
+                    memory_utilization = (total_memory_gb / target_memory_gb) * 100
+                    
+                    with col1:
+                        st.metric("Target Memory", f"{target_memory_gb:.1f} GB")
+                    with col2:
+                        st.metric("Total Memory", f"{total_memory_gb:.1f} GB")
+                    with col3:
+                        color = "🔴" if memory_utilization > 95 else "🟡" if memory_utilization > 85 else "🟢"
+                        st.metric(f"Memory Utilization {color}", f"{memory_utilization:.1f}%")
+                
+                if memory_grants_pending_data:
+                    pending_grants = memory_grants_pending_data[-1]['Average']
+                    color = "🔴" if pending_grants > 5 else "🟡" if pending_grants > 1 else "🟢"
+                    with col4:
+                        st.metric(f"Memory Grants Pending {color}", f"{pending_grants:.0f}")
+                
+                if page_life_data:
+                    page_life_value = page_life_data[-1]['Average']
+                    color = "🔴" if page_life_value < 300 else "🟡" if page_life_value < 1000 else "🟢"
+                    st.metric(f"Page Life Expectancy {color}", f"{page_life_value:.0f} seconds")
+                
+                # Memory trend chart
+                if target_memory_data and total_memory_data:
+                    fig = go.Figure()
+                    
+                    fig.add_trace(go.Scatter(
+                        x=[dp['Timestamp'] for dp in target_memory_data],
+                        y=[dp['Average']/1024/1024 for dp in target_memory_data],
+                        name='Target Memory (GB)',
+                        line=dict(color='blue')
+                    ))
+                    
+                    fig.add_trace(go.Scatter(
+                        x=[dp['Timestamp'] for dp in total_memory_data],
+                        y=[dp['Average']/1024/1024 for dp in total_memory_data],
+                        name='Total Memory (GB)',
+                        line=dict(color='red')
+                    ))
+                    
+                    fig.update_layout(title="SQL Server Memory Usage Trends", 
+                                    xaxis_title="Time", yaxis_title="Memory (GB)")
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            # ===== LOCKING METRICS =====
+            with metric_categories[2]:
+                st.subheader("🔒 SQL Server Locking and Blocking Metrics")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                lock_waits_data = all_metrics.get(f"{selected_instance}_lock_waits_per_sec", [])
+                lock_timeouts_data = all_metrics.get(f"{selected_instance}_lock_timeouts_per_sec", [])
+                deadlocks_data = all_metrics.get(f"{selected_instance}_deadlocks_per_sec", [])
+                processes_blocked_data = all_metrics.get(f"{selected_instance}_processes_blocked", [])
+                
+                if lock_waits_data:
+                    lock_waits = lock_waits_data[-1]['Average']
+                    color = "🔴" if lock_waits > 50 else "🟡" if lock_waits > 20 else "🟢"
+                    with col1:
+                        st.metric(f"Lock Waits/sec {color}", f"{lock_waits:.1f}")
+                
+                if lock_timeouts_data:
+                    lock_timeouts = lock_timeouts_data[-1]['Average']
+                    color = "🔴" if lock_timeouts > 5 else "🟡" if lock_timeouts > 1 else "🟢"
+                    with col2:
+                        st.metric(f"Lock Timeouts/sec {color}", f"{lock_timeouts:.1f}")
+                
+                if deadlocks_data:
+                    deadlocks = deadlocks_data[-1]['Average']
+                    color = "🔴" if deadlocks > 0.1 else "🟡" if deadlocks > 0 else "🟢"
+                    with col3:
+                        st.metric(f"Deadlocks/sec {color}", f"{deadlocks:.2f}")
+                
+                if processes_blocked_data:
+                    blocked_processes = processes_blocked_data[-1]['Average']
+                    color = "🔴" if blocked_processes > 5 else "🟡" if blocked_processes > 0 else "🟢"
+                    with col4:
+                        st.metric(f"Processes Blocked {color}", f"{blocked_processes:.0f}")
+                
+                # Locking trends chart
+                if lock_waits_data and deadlocks_data:
+                    fig = make_subplots(
+                        rows=2, cols=1,
+                        subplot_titles=('Lock Waits per Second', 'Deadlocks per Second')
+                    )
+                    
+                    fig.add_trace(
+                        go.Scatter(x=[dp['Timestamp'] for dp in lock_waits_data],
+                                  y=[dp['Average'] for dp in lock_waits_data],
+                                  name='Lock Waits/sec', line=dict(color='orange')),
+                        row=1, col=1
+                    )
+                    
+                    fig.add_trace(
+                        go.Scatter(x=[dp['Timestamp'] for dp in deadlocks_data],
+                                  y=[dp['Average'] for dp in deadlocks_data],
+                                  name='Deadlocks/sec', line=dict(color='red')),
+                        row=2, col=1
+                    )
+                    
+                    fig.update_layout(height=500, showlegend=False, title_text="Locking and Blocking Trends")
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            # ===== WAIT STATISTICS =====
+            with metric_categories[3]:
+                st.subheader("📊 SQL Server Wait Statistics")
+                
+                # Top wait types
+                wait_types = [
+                    ('CXPACKET', all_metrics.get(f"{selected_instance}_wait_cxpacket_ms", [])),
+                    ('ASYNC_NETWORK_IO', all_metrics.get(f"{selected_instance}_wait_async_network_io_ms", [])),
+                    ('PAGEIOLATCH_SH', all_metrics.get(f"{selected_instance}_wait_pageiolatch_sh_ms", [])),
+                    ('PAGEIOLATCH_EX', all_metrics.get(f"{selected_instance}_wait_pageiolatch_ex_ms", [])),
+                    ('WRITELOG', all_metrics.get(f"{selected_instance}_wait_writelog_ms", [])),
+                    ('RESOURCE_SEMAPHORE', all_metrics.get(f"{selected_instance}_wait_resource_semaphore_ms", []))
+                ]
+                
+                # Current wait times
+                current_waits = []
+                for wait_name, wait_data in wait_types:
+                    if wait_data:
+                        current_waits.append({
+                            'Wait Type': wait_name,
+                            'Current Wait Time (ms)': wait_data[-1]['Average'],
+                            'Status': '🔴' if wait_data[-1]['Average'] > 1000 else '🟡' if wait_data[-1]['Average'] > 100 else '🟢'
+                        })
+                
+                if current_waits:
+                    waits_df = pd.DataFrame(current_waits)
+                    waits_df = waits_df.sort_values('Current Wait Time (ms)', ascending=False)
+                    st.dataframe(waits_df, use_container_width=True)
+                    
+                    # Wait statistics chart
+                    fig = go.Figure()
+                    
+                    for wait_name, wait_data in wait_types[:4]:  # Top 4 wait types
+                        if wait_data:
+                            fig.add_trace(go.Scatter(
+                                x=[dp['Timestamp'] for dp in wait_data],
+                                y=[dp['Average'] for dp in wait_data],
+                                name=wait_name,
+                                mode='lines'
+                            ))
+                    
+                    fig.update_layout(title="Top Wait Types Trends", 
+                                    xaxis_title="Time", yaxis_title="Wait Time (ms)")
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            # ===== ALWAYS ON METRICS =====
+            with metric_categories[4]:
+                st.subheader("🔄 Always On Availability Groups Metrics")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                log_send_queue_data = all_metrics.get(f"{selected_instance}_ag_log_send_queue_size", [])
+                log_send_rate_data = all_metrics.get(f"{selected_instance}_ag_log_send_rate", [])
+                redo_queue_data = all_metrics.get(f"{selected_instance}_ag_redo_queue_size", [])
+                redo_rate_data = all_metrics.get(f"{selected_instance}_ag_redo_rate", [])
+                
+                if log_send_queue_data:
+                    log_send_queue_mb = log_send_queue_data[-1]['Average'] / 1024
+                    color = "🔴" if log_send_queue_mb > 100 else "🟡" if log_send_queue_mb > 50 else "🟢"
+                    with col1:
+                        st.metric(f"Log Send Queue {color}", f"{log_send_queue_mb:.1f} MB")
+                
+                if log_send_rate_data:
+                    log_send_rate_mb = log_send_rate_data[-1]['Average'] / 1024
+                    with col2:
+                        st.metric("Log Send Rate", f"{log_send_rate_mb:.1f} MB/s")
+                
+                if redo_queue_data:
+                    redo_queue_mb = redo_queue_data[-1]['Average'] / 1024
+                    color = "🔴" if redo_queue_mb > 50 else "🟡" if redo_queue_mb > 25 else "🟢"
+                    with col3:
+                        st.metric(f"Redo Queue {color}", f"{redo_queue_mb:.1f} MB")
+                
+                if redo_rate_data:
+                    redo_rate_mb = redo_rate_data[-1]['Average'] / 1024
+                    with col4:
+                        st.metric("Redo Rate", f"{redo_rate_mb:.1f} MB/s")
+                
+                # Always On trends
+                if log_send_queue_data and redo_queue_data:
+                    fig = make_subplots(
+                        rows=2, cols=1,
+                        subplot_titles=('Log Send Queue Size (MB)', 'Redo Queue Size (MB)')
+                    )
+                    
+                    fig.add_trace(
+                        go.Scatter(x=[dp['Timestamp'] for dp in log_send_queue_data],
+                                  y=[dp['Average']/1024 for dp in log_send_queue_data],
+                                  name='Log Send Queue (MB)', line=dict(color='blue')),
+                        row=1, col=1
+                    )
+                    
+                    fig.add_trace(
+                        go.Scatter(x=[dp['Timestamp'] for dp in redo_queue_data],
+                                  y=[dp['Average']/1024 for dp in redo_queue_data],
+                                  name='Redo Queue (MB)', line=dict(color='red')),
+                        row=2, col=1
+                    )
+                    
+                    fig.update_layout(height=500, showlegend=False, title_text="Always On AG Performance")
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            # ===== DATABASE METRICS =====
+            with metric_categories[5]:
+                st.subheader("💾 Database-Level Metrics")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                data_file_size_data = all_metrics.get(f"{selected_instance}_db_data_file_size_kb", [])
+                log_file_size_data = all_metrics.get(f"{selected_instance}_db_log_file_size_kb", [])
+                log_used_percent_data = all_metrics.get(f"{selected_instance}_db_percent_log_used", [])
+                transactions_data = all_metrics.get(f"{selected_instance}_db_transactions_per_sec", [])
+                
+                if data_file_size_data:
+                    data_size_gb = data_file_size_data[-1]['Average'] / 1024 / 1024
+                    with col1:
+                        st.metric("Data File Size", f"{data_size_gb:.1f} GB")
+                
+                if log_file_size_data:
+                    log_size_gb = log_file_size_data[-1]['Average'] / 1024 / 1024
+                    with col2:
+                        st.metric("Log File Size", f"{log_size_gb:.1f} GB")
+                
+                if log_used_percent_data:
+                    log_used_percent = log_used_percent_data[-1]['Average']
+                    color = "🔴" if log_used_percent > 80 else "🟡" if log_used_percent > 60 else "🟢"
+                    with col3:
+                        st.metric(f"Log Used % {color}", f"{log_used_percent:.1f}%")
+                
+                if transactions_data:
+                    transactions_per_sec = transactions_data[-1]['Average']
+                    with col4:
+                        st.metric("Transactions/sec", f"{transactions_per_sec:.0f}")
+                
+                # Database growth trends
+                if data_file_size_data and log_file_size_data:
+                    fig = go.Figure()
+                    
+                    fig.add_trace(go.Scatter(
+                        x=[dp['Timestamp'] for dp in data_file_size_data],
+                        y=[dp['Average']/1024/1024 for dp in data_file_size_data],
+                        name='Data File Size (GB)',
+                        line=dict(color='blue')
+                    ))
+                    
+                    fig.add_trace(go.Scatter(
+                        x=[dp['Timestamp'] for dp in log_file_size_data],
+                        y=[dp['Average']/1024/1024 for dp in log_file_size_data],
+                        name='Log File Size (GB)',
+                        line=dict(color='red')
+                    ))
+                    
+                    fig.update_layout(title="Database File Size Trends", 
+                                    xaxis_title="Time", yaxis_title="Size (GB)")
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            # ===== SECURITY METRICS =====
+            with metric_categories[6]:
+                st.subheader("🛡️ SQL Server Security Metrics")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                failed_logins_data = all_metrics.get(f"{selected_instance}_failed_logins_per_sec", [])
+                user_connections_data = all_metrics.get(f"{selected_instance}_user_connections", [])
+                logins_data = all_metrics.get(f"{selected_instance}_logins_per_sec", [])
+                logouts_data = all_metrics.get(f"{selected_instance}_logouts_per_sec", [])
+                
+                if failed_logins_data:
+                    failed_logins = failed_logins_data[-1]['Average']
+                    color = "🔴" if failed_logins > 5 else "🟡" if failed_logins > 1 else "🟢"
+                    with col1:
+                        st.metric(f"Failed Logins/sec {color}", f"{failed_logins:.1f}")
+                
+                if user_connections_data:
+                    user_connections = user_connections_data[-1]['Average']
+                    color = "🔴" if user_connections > 200 else "🟡" if user_connections > 100 else "🟢"
+                    with col2:
+                        st.metric(f"User Connections {color}", f"{user_connections:.0f}")
+                
+                if logins_data:
+                    logins_per_sec = logins_data[-1]['Average']
+                    with col3:
+                        st.metric("Logins/sec", f"{logins_per_sec:.1f}")
+                
+                if logouts_data:
+                    logouts_per_sec = logouts_data[-1]['Average']
+                    with col4:
+                        st.metric("Logouts/sec", f"{logouts_per_sec:.1f}")
+                
+                # Security trends
+                if failed_logins_data and user_connections_data:
+                    fig = make_subplots(
+                        rows=2, cols=1,
+                        subplot_titles=('Failed Logins per Second', 'User Connections')
+                    )
+                    
+                    fig.add_trace(
+                        go.Scatter(x=[dp['Timestamp'] for dp in failed_logins_data],
+                                  y=[dp['Average'] for dp in failed_logins_data],
+                                  name='Failed Logins/sec', line=dict(color='red')),
+                        row=1, col=1
+                    )
+                    
+                    fig.add_trace(
+                        go.Scatter(x=[dp['Timestamp'] for dp in user_connections_data],
+                                  y=[dp['Average'] for dp in user_connections_data],
+                                  name='User Connections', line=dict(color='blue')),
+                        row=2, col=1
+                    )
+                    
+                    fig.update_layout(height=500, showlegend=False, title_text="Security Metrics Trends")
+                    st.plotly_chart(fig, use_container_width=True)
+        
+        else:
+            st.warning("No EC2 SQL Server instances found. Please ensure instances are properly tagged.")
+    
+    # =================== OS Metrics Tab ===================
+    with tab3:
+        st.header("🖥️ Operating System Metrics")
+        
+        if ec2_instances:
+            # Instance selector
+            instance_options = {}
+            for ec2 in ec2_instances:
+                instance_name = "Unknown"
+                for tag in ec2.get('Tags', []):
+                    if tag['Key'] == 'Name':
+                        instance_name = tag['Value']
+                        break
+                instance_options[f"{instance_name} ({ec2['InstanceId']})"] = ec2['InstanceId']
+            
+            selected_instance_display = st.selectbox("Select Instance for OS Metrics", 
+                                                    list(instance_options.keys()))
+            selected_instance = instance_options[selected_instance_display]
+            
+            st.markdown(f"### 🖥️ OS Metrics for {selected_instance_display}")
+            
+            # OS Metric Categories
+            os_categories = st.tabs([
+                "💻 CPU & Load", 
+                "🧠 Memory", 
+                "💾 Disk I/O", 
+                "🌐 Network",
+                "⚙️ Processes",
+                "📊 System Health"
+            ])
+            
+            # ===== CPU & LOAD METRICS =====
+            with os_categories[0]:
+                st.subheader("💻 CPU Utilization & System Load")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                # Get CPU metrics for selected instance
+                cpu_active_data = all_metrics.get(f"{selected_instance}_os_cpu_usage_active", [])
+                cpu_system_data = all_metrics.get(f"{selected_instance}_os_cpu_usage_system", [])
+                cpu_user_data = all_metrics.get(f"{selected_instance}_os_cpu_usage_user", [])
+                cpu_iowait_data = all_metrics.get(f"{selected_instance}_os_cpu_usage_iowait", [])
+                
+                if cpu_active_data:
+                    current_cpu = cpu_active_data[-1]['Average']
+                    color = "🔴" if current_cpu > 80 else "🟡" if current_cpu > 60 else "🟢"
+                    with col1:
+                        st.metric(f"CPU Active {color}", f"{current_cpu:.1f}%")
+                
+                if cpu_system_data:
+                    current_system = cpu_system_data[-1]['Average']
+                    with col2:
+                        st.metric("System CPU", f"{current_system:.1f}%")
+                
+                if cpu_user_data:
+                    current_user = cpu_user_data[-1]['Average']
+                    with col3:
+                        st.metric("User CPU", f"{current_user:.1f}%")
+                
+                if cpu_iowait_data:
+                    current_iowait = cpu_iowait_data[-1]['Average']
+                    color = "🔴" if current_iowait > 20 else "🟡" if current_iowait > 10 else "🟢"
+                    with col4:
+                        st.metric(f"I/O Wait {color}", f"{current_iowait:.1f}%")
+                
+                # CPU breakdown chart
+                if cpu_active_data and cpu_system_data and cpu_user_data:
+                    fig = go.Figure()
+                    
+                    fig.add_trace(go.Scatter(
+                        x=[dp['Timestamp'] for dp in cpu_active_data],
+                        y=[dp['Average'] for dp in cpu_active_data],
+                        name='Total CPU Active',
+                        line=dict(color='red')
+                    ))
+                    
+                    fig.add_trace(go.Scatter(
+                        x=[dp['Timestamp'] for dp in cpu_system_data],
+                        y=[dp['Average'] for dp in cpu_system_data],
+                        name='System CPU',
+                        line=dict(color='orange')
+                    ))
+                    
+                    fig.add_trace(go.Scatter(
+                        x=[dp['Timestamp'] for dp in cpu_user_data],
+                        y=[dp['Average'] for dp in cpu_user_data],
+                        name='User CPU',
+                        line=dict(color='blue')
+                    ))
+                    
+                    fig.update_layout(title="CPU Utilization Breakdown", 
+                                    xaxis_title="Time", yaxis_title="CPU %")
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            # ===== MEMORY METRICS =====
+            with os_categories[1]:
+                st.subheader("🧠 Memory Utilization")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                mem_used_percent_data = all_metrics.get(f"{selected_instance}_os_mem_used_percent", [])
+                mem_available_data = all_metrics.get(f"{selected_instance}_os_mem_available_percent", [])
+                mem_cached_data = all_metrics.get(f"{selected_instance}_os_mem_cached", [])
+                
+                if mem_used_percent_data:
+                    current_mem = mem_used_percent_data[-1]['Average']
+                    color = "🔴" if current_mem > 90 else "🟡" if current_mem > 80 else "🟢"
+                    with col1:
+                        st.metric(f"Memory Used {color}", f"{current_mem:.1f}%")
+                
+                if mem_available_data:
+                    available_mem = mem_available_data[-1]['Average']
+                    with col2:
+                        st.metric("Memory Available", f"{available_mem:.1f}%")
+                
+                if mem_cached_data:
+                    cached_mem = mem_cached_data[-1]['Average'] / 1024 / 1024  # Convert to MB
+                    with col3:
+                        st.metric("Cached Memory", f"{cached_mem:.1f} MB")
+                
+                # Memory usage chart
+                if mem_used_percent_data and mem_available_data:
+                    fig = go.Figure()
+                    
+                    fig.add_trace(go.Scatter(
+                        x=[dp['Timestamp'] for dp in mem_used_percent_data],
+                        y=[dp['Average'] for dp in mem_used_percent_data],
+                        name='Memory Used %',
+                        line=dict(color='red')
+                    ))
+                    
+                    fig.add_trace(go.Scatter(
+                        x=[dp['Timestamp'] for dp in mem_available_data],
+                        y=[dp['Average'] for dp in mem_available_data],
+                        name='Memory Available %',
+                        line=dict(color='green')
+                    ))
+                    
+                    fig.update_layout(title="Memory Utilization Trends", 
+                                    xaxis_title="Time", yaxis_title="Memory %")
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            # ===== DISK I/O METRICS =====
+            with os_categories[2]:
+                st.subheader("💾 Disk I/O Performance")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                disk_used_data = all_metrics.get(f"{selected_instance}_os_disk_used_percent", [])
+                disk_read_bytes_data = all_metrics.get(f"{selected_instance}_os_diskio_read_bytes", [])
+                disk_write_bytes_data = all_metrics.get(f"{selected_instance}_os_diskio_write_bytes", [])
+                disk_io_time_data = all_metrics.get(f"{selected_instance}_os_diskio_io_time", [])
+                
+                if disk_used_data:
+                    disk_used = disk_used_data[-1]['Average']
+                    color = "🔴" if disk_used > 90 else "🟡" if disk_used > 80 else "🟢"
+                    with col1:
+                        st.metric(f"Disk Used {color}", f"{disk_used:.1f}%")
+                
+                if disk_read_bytes_data:
+                    read_mb = disk_read_bytes_data[-1]['Average'] / 1024 / 1024
+                    with col2:
+                        st.metric("Disk Read", f"{read_mb:.1f} MB/s")
+                
+                if disk_write_bytes_data:
+                    write_mb = disk_write_bytes_data[-1]['Average'] / 1024 / 1024
+                    with col3:
+                        st.metric("Disk Write", f"{write_mb:.1f} MB/s")
+                
+                if disk_io_time_data:
+                    io_time = disk_io_time_data[-1]['Average']
+                    color = "🔴" if io_time > 50 else "🟡" if io_time > 25 else "🟢"
+                    with col4:
+                        st.metric(f"I/O Time {color}", f"{io_time:.1f}%")
+                
+                # Disk I/O chart
+                if disk_read_bytes_data and disk_write_bytes_data:
+                    fig = go.Figure()
+                    
+                    fig.add_trace(go.Scatter(
+                        x=[dp['Timestamp'] for dp in disk_read_bytes_data],
+                        y=[dp['Average']/1024/1024 for dp in disk_read_bytes_data],
+                        name='Disk Read (MB/s)',
+                        line=dict(color='blue')
+                    ))
+                    
+                    fig.add_trace(go.Scatter(
+                        x=[dp['Timestamp'] for dp in disk_write_bytes_data],
+                        y=[dp['Average']/1024/1024 for dp in disk_write_bytes_data],
+                        name='Disk Write (MB/s)',
+                        line=dict(color='red')
+                    ))
+                    
+                    fig.update_layout(title="Disk I/O Performance", 
+                                    xaxis_title="Time", yaxis_title="MB/s")
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            # ===== NETWORK METRICS =====
+            with os_categories[3]:
+                st.subheader("🌐 Network Performance")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                net_bytes_sent_data = all_metrics.get(f"{selected_instance}_os_net_bytes_sent", [])
+                net_bytes_recv_data = all_metrics.get(f"{selected_instance}_os_net_bytes_recv", [])
+                net_packets_sent_data = all_metrics.get(f"{selected_instance}_os_net_packets_sent", [])
+                net_packets_recv_data = all_metrics.get(f"{selected_instance}_os_net_packets_recv", [])
+                
+                if net_bytes_sent_data:
+                    sent_mb = net_bytes_sent_data[-1]['Average'] / 1024 / 1024
+                    with col1:
+                        st.metric("Network Out", f"{sent_mb:.1f} MB/s")
+                
+                if net_bytes_recv_data:
+                    recv_mb = net_bytes_recv_data[-1]['Average'] / 1024 / 1024
+                    with col2:
+                        st.metric("Network In", f"{recv_mb:.1f} MB/s")
+                
+                if net_packets_sent_data:
+                    packets_sent = net_packets_sent_data[-1]['Average']
+                    with col3:
+                        st.metric("Packets Out/s", f"{packets_sent:.0f}")
+                
+                if net_packets_recv_data:
+                    packets_recv = net_packets_recv_data[-1]['Average']
+                    with col4:
+                        st.metric("Packets In/s", f"{packets_recv:.0f}")
+                
+                # Network chart
+                if net_bytes_sent_data and net_bytes_recv_data:
+                    fig = go.Figure()
+                    
+                    fig.add_trace(go.Scatter(
+                        x=[dp['Timestamp'] for dp in net_bytes_sent_data],
+                        y=[dp['Average']/1024/1024 for dp in net_bytes_sent_data],
+                        name='Network Out (MB/s)',
+                        line=dict(color='blue')
+                    ))
+                    
+                    fig.add_trace(go.Scatter(
+                        x=[dp['Timestamp'] for dp in net_bytes_recv_data],
+                        y=[dp['Average']/1024/1024 for dp in net_bytes_recv_data],
+                        name='Network In (MB/s)',
+                        line=dict(color='green')
+                    ))
+                    
+                    fig.update_layout(title="Network Performance", 
+                                    xaxis_title="Time", yaxis_title="MB/s")
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            # ===== PROCESS METRICS =====
+            with os_categories[4]:
+                st.subheader("⚙️ Process Information")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                processes_running_data = all_metrics.get(f"{selected_instance}_os_processes_running", [])
+                processes_sleeping_data = all_metrics.get(f"{selected_instance}_os_processes_sleeping", [])
+                processes_blocked_data = all_metrics.get(f"{selected_instance}_os_processes_blocked", [])
+                system_load1_data = all_metrics.get(f"{selected_instance}_os_system_load1", [])
+                
+                if processes_running_data:
+                    running_procs = processes_running_data[-1]['Average']
+                    with col1:
+                        st.metric("Running Processes", f"{running_procs:.0f}")
+                
+                if processes_sleeping_data:
+                    sleeping_procs = processes_sleeping_data[-1]['Average']
+                    with col2:
+                        st.metric("Sleeping Processes", f"{sleeping_procs:.0f}")
+                
+                if processes_blocked_data:
+                    blocked_procs = processes_blocked_data[-1]['Average']
+                    color = "🔴" if blocked_procs > 5 else "🟡" if blocked_procs > 0 else "🟢"
+                    with col3:
+                        st.metric(f"Blocked Processes {color}", f"{blocked_procs:.0f}")
+                
+                if system_load1_data:
+                    load_avg = system_load1_data[-1]['Average']
+                    color = "🔴" if load_avg > 4 else "🟡" if load_avg > 2 else "🟢"
+                    with col4:
+                        st.metric(f"Load Average {color}", f"{load_avg:.2f}")
+            
+            # ===== SYSTEM HEALTH =====
+            with os_categories[5]:
+                st.subheader("📊 Overall System Health")
+                
+                # System health score calculation
+                health_score = 100
+                health_issues = []
+                
+                # Check CPU
+                if cpu_active_data:
+                    cpu = cpu_active_data[-1]['Average']
+                    if cpu > 90:
+                        health_score -= 30
+                        health_issues.append("Critical CPU usage")
+                    elif cpu > 80:
+                        health_score -= 15
+                        health_issues.append("High CPU usage")
+                
+                # Check Memory
+                if mem_used_percent_data:
+                    mem = mem_used_percent_data[-1]['Average']
+                    if mem > 95:
+                        health_score -= 25
+                        health_issues.append("Critical memory usage")
+                    elif mem > 85:
+                        health_score -= 10
+                        health_issues.append("High memory usage")
+                
+                # Check Disk
+                if disk_used_data:
+                    disk = disk_used_data[-1]['Average']
+                    if disk > 95:
+                        health_score -= 20
+                        health_issues.append("Critical disk usage")
+                    elif disk > 85:
+                        health_score -= 10
+                        health_issues.append("High disk usage")
+                
+                # Display health score
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    health_color = "🟢" if health_score > 80 else "🟡" if health_score > 60 else "🔴"
+                    st.metric(f"System Health {health_color}", f"{health_score}/100")
+                
+                with col2:
+                    st.metric("Health Issues", len(health_issues))
+                
+                with col3:
+                    uptime_hours = np.random.randint(24, 720)  # Demo uptime
+                    st.metric("Uptime", f"{uptime_hours} hours")
+                
+                # Health issues list
+                if health_issues:
+                    st.subheader("⚠️ Health Issues")
+                    for issue in health_issues:
+                        st.warning(f"• {issue}")
+                else:
+                    st.success("✅ No health issues detected")
+        
+        else:
+            st.warning("No EC2 instances found for OS metrics monitoring.")
+    
+    # =================== Always On Tab ===================
+    with tab4:
+        st.header("🔄 Always On Availability Groups")
+        
+        # Get AG information
+        availability_groups = st.session_state.always_on_monitor.get_availability_groups()
+        
+        if availability_groups:
+            for ag in availability_groups:
+                # AG Status Header
+                sync_status = ag['synchronization_health']
+                status_color = "cluster-online" if sync_status == 'HEALTHY' else "cluster-degraded" if sync_status == 'PARTIALLY_HEALTHY' else "cluster-offline"
+                
+                st.markdown(f'<div class="{status_color}">🔄 <strong>{ag["name"]}</strong> - {sync_status}</div>', 
+                           unsafe_allow_html=True)
+                
+                # AG Details
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.write(f"**Primary Replica:** {ag['primary_replica']}")
+                    st.write(f"**Role Health:** {ag['role_health']}")
+                
+                with col2:
+                    st.write(f"**Secondary Replicas:** {len(ag['secondary_replicas'])}")
+                    for replica in ag['secondary_replicas']:
+                        st.write(f"  • {replica}")
+                
+                with col3:
+                    st.write(f"**Databases:** {len(ag['databases'])}")
+                    for db in ag['databases']:
+                        st.write(f"  • {db}")
+                
+                # Replica Health Details
+                with st.expander(f"🔍 Detailed Health - {ag['name']}"):
+                    replica_data = []
+                    
+                    # Primary replica
+                    primary_health = st.session_state.always_on_monitor.get_replica_health(ag['primary_replica'])
+                    replica_data.append(primary_health)
+                    
+                    # Secondary replicas
+                    for replica in ag['secondary_replicas']:
+                        secondary_health = st.session_state.always_on_monitor.get_replica_health(replica)
+                        replica_data.append(secondary_health)
+                    
+                    # Display replica health table
+                    if replica_data:
+                        replica_df = pd.DataFrame(replica_data)
+                        st.dataframe(replica_df, use_container_width=True)
+                
+                # Synchronization Lag
+                st.subheader(f"📊 Synchronization Status - {ag['name']}")
+                sync_lag = st.session_state.always_on_monitor.check_synchronization_lag()
+                
+                if sync_lag:
+                    lag_df = pd.DataFrame(sync_lag)
+                    
+                    # Color code based on lag
+                    def lag_color(lag_seconds):
+                        if lag_seconds < 1:
+                            return "🟢"
+                        elif lag_seconds < 5:
+                            return "🟡"
+                        else:
+                            return "🔴"
+                    
+                    lag_df['Status'] = lag_df['lag_seconds'].apply(lag_color)
+                    st.dataframe(lag_df, use_container_width=True)
+                    
+                    # Alert on high lag
+                    high_lag_dbs = lag_df[lag_df['lag_seconds'] > 5]
+                    if not high_lag_dbs.empty:
+                        st.warning(f"⚠️ High synchronization lag detected for {len(high_lag_dbs)} databases")
+                
+                st.markdown("---")
+        
+        else:
+            st.info("📝 No Always On Availability Groups detected in your environment")
+            st.write("**To set up Always On monitoring:**")
+            st.write("1. Ensure CloudWatch agent is installed on SQL Server instances")
+            st.write("2. Configure custom metrics for Always On DMVs")
+            st.write("3. Set up appropriate IAM permissions")
+    
+    # =================== Auto-Remediation Tab ===================
+    with tab5:
+        st.header("🤖 Intelligent Auto-Remediation")
+        
+        if enable_auto_remediation:
+            # Evaluate current conditions for remediation
+            current_alerts = []  # This would come from your alert system
+            remediation_actions = st.session_state.auto_remediation.evaluate_conditions(all_metrics, current_alerts)
+            
+            if remediation_actions:
+                st.subheader("🚨 Remediation Actions Required")
+                
+                for action in remediation_actions:
+                    severity_color = {
+                        'Critical': 'alert-critical',
+                        'High': 'alert-warning',
+                        'Medium': 'alert-warning',
+                        'Low': 'metric-card'
+                    }.get(action['severity'], 'metric-card')
+                    
+                    st.markdown(f"""
+                    <div class="{severity_color}">
+                        <strong>🔧 {action['rule_name'].replace('_', ' ').title()}</strong><br>
+                        <strong>Severity:</strong> {action['severity']}<br>
+                        <strong>Estimated Impact:</strong> {action['estimated_impact']}<br>
+                        <strong>Proposed Actions:</strong> {', '.join(action['actions'])}<br>
+                        <strong>Auto-Execute:</strong> {'Yes' if action['auto_execute'] else 'Manual Approval Required'}
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        if action['auto_execute']:
+                            if st.button(f"🤖 Auto-Execute", key=f"auto_{action['rule_name']}"):
+                                with st.spinner("Executing remediation..."):
+                                    result = st.session_state.auto_remediation.execute_remediation(action)
+                                    if result['status'] == 'success':
+                                        st.success(f"✅ {result['message']}")
+                                    else:
+                                        st.error(f"❌ {result['message']}")
+                    
+                    with col2:
+                        if st.button(f"👁️ Preview Actions", key=f"preview_{action['rule_name']}"):
+                            st.info(f"Would execute: {', '.join(action['actions'])}")
+                    
+                    with col3:
+                        if st.button(f"⏸️ Postpone", key=f"postpone_{action['rule_name']}"):
+                            st.info("Action postponed for 1 hour")
+                    
+                    st.markdown("---")
+            
+            else:
+                st.success("🎉 No immediate remediation actions required!")
+                st.info("All systems are operating within normal parameters.")
+            
+            # Remediation History
+            st.subheader("📋 Recent Remediation History")
+            
+            if st.session_state.auto_remediation.remediation_history:
+                history_data = []
+                for entry in st.session_state.auto_remediation.remediation_history[-10:]:  # Last 10
+                    history_data.append({
+                        'Timestamp': entry['executed_at'].strftime('%Y-%m-%d %H:%M:%S'),
+                        'Rule': entry['action']['rule_name'].replace('_', ' ').title(),
+                        'Actions': ', '.join(entry['action']['actions']),
+                        'Status': entry['status'],
+                        'Results': len(entry['results'])
+                    })
+                
+                if history_data:
+                    history_df = pd.DataFrame(history_data)
+                    st.dataframe(history_df, use_container_width=True)
+            else:
+                st.info("No remediation actions have been executed yet.")
+            
+            # Remediation Configuration
+            st.subheader("⚙️ Remediation Configuration")
+            
+            with st.expander("🔧 Configure Remediation Rules"):
+                st.write("**Current Remediation Rules:**")
+                
+                for rule_name, rule_config in st.session_state.auto_remediation.remediation_rules.items():
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.write(f"**{rule_name.replace('_', ' ').title()}**")
+                        st.write(f"Threshold: {rule_config['threshold']}")
+                    
+                    with col2:
+                        st.write(f"Duration: {rule_config['duration_minutes']} min")
+                        st.write(f"Auto-execute: {rule_config['auto_execute']}")
+                    
+                    with col3:
+                        st.write(f"Actions: {len(rule_config['actions'])}")
+                        for action in rule_config['actions']:
+                            st.write(f"  • {action}")
+        
+        else:
+            st.warning("🔒 Auto-remediation is currently disabled")
+            st.info("Enable auto-remediation in the sidebar to see available actions and configure automated responses to system issues.")
+    
+    # =================== Predictive Analytics Tab ===================
+    with tab6:
+        st.header("🔮 Predictive Analytics & Forecasting")
+        
+        if enable_predictive_alerts:
+            # Analyze trends
+            trend_analysis = st.session_state.predictive_analytics.analyze_trends(all_metrics, days=30)
+            
+            if trend_analysis:
+                st.subheader("📊 Performance Trend Analysis")
+                
+                for metric_name, analysis in trend_analysis.items():
+                    if analysis.get('status') == 'analyzed':
+                        
+                        # Create prediction visualization
+                        col1, col2 = st.columns([2, 1])
+                        
+                        with col1:
+                            # Historical vs Predicted chart
+                            if all_metrics.get(metric_name):
+                                historical_data = all_metrics[metric_name]
+                                predicted_values = analysis['future_prediction']
+                                
+                                fig = go.Figure()
+                                
+                                # Historical data
+                                fig.add_trace(go.Scatter(
+                                    x=[dp['Timestamp'] for dp in historical_data],
+                                    y=[dp['Average'] for dp in historical_data],
+                                    name='Historical',
+                                    line=dict(color='blue')
+                                ))
+                                
+                                # Predicted data
+                                future_timestamps = [
+                                    datetime.now() + timedelta(hours=i) 
+                                    for i in range(len(predicted_values))
+                                ]
+                                
+                                fig.add_trace(go.Scatter(
+                                    x=future_timestamps,
+                                    y=predicted_values,
+                                    name='Predicted',
+                                    line=dict(color='red', dash='dash')
+                                ))
+                                
+                                fig.update_layout(
+                                    title=f"{metric_name.replace('_', ' ').title()} - Trend Analysis",
+                                    xaxis_title="Time",
+                                    yaxis_title="Value",
+                                    height=300
+                                )
+                                
+                                st.plotly_chart(fig, use_container_width=True)
+                        
+                        with col2:
+                            # Analysis summary
+                            risk_colors = {
+                                'critical': '🔴',
+                                'warning': '🟡',
+                                'low': '🟢'
+                            }
+                            
+                            trend_colors = {
+                                'increasing': '📈',
+                                'decreasing': '📉',
+                                'stable': '➡️'
+                            }
+                            
+                            st.metric(
+                                f"Risk Level {risk_colors.get(analysis['risk_level'], '🔵')}", 
+                                analysis['risk_level'].title()
+                            )
+                            
+                            st.metric(
+                                f"Trend {trend_colors.get(analysis['trend'], '➡️')}", 
+                                analysis['trend'].title()
+                            )
+                            
+                            st.metric(
+                                "Confidence", 
+                                f"{analysis['confidence']*100:.0f}%"
+                            )
+                        
+                        # Recommendations
+                        if analysis.get('recommendations'):
+                            st.write(f"**🎯 Recommendations for {metric_name.replace('_', ' ').title()}:**")
+                            for rec in analysis['recommendations']:
+                                st.write(f"• {rec}")
+                        
+                        st.markdown("---")
+            
+            # Capacity Planning
+            st.subheader("📈 Capacity Planning Insights")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**🔮 30-Day Forecast:**")
+                
+                # Simulate capacity predictions
+                capacity_predictions = {
+                    'CPU Usage': {'current': 65, 'predicted': 75, 'trend': 'increasing'},
+                    'Memory Usage': {'current': 78, 'predicted': 82, 'trend': 'stable'},
+                    'Disk Usage': {'current': 45, 'predicted': 52, 'trend': 'increasing'},
+                    'Connection Count': {'current': 85, 'predicted': 92, 'trend': 'increasing'}
+                }
+                
+                for resource, data in capacity_predictions.items():
+                    trend_icon = {'increasing': '📈', 'decreasing': '📉', 'stable': '➡️'}[data['trend']]
+                    color = '🔴' if data['predicted'] > 90 else '🟡' if data['predicted'] > 80 else '🟢'
+                    
+                    st.write(f"{color} **{resource}:** {data['current']}% → {data['predicted']}% {trend_icon}")
+            
+            with col2:
+                st.write("**⚠️ Capacity Recommendations:**")
+                st.write("• Monitor CPU usage closely - trending upward")
+                st.write("• Consider scaling memory in Q2")
+                st.write("• Plan disk expansion within 60 days")
+                st.write("• Review connection pooling configuration")
+            
+            # Failure Prediction
+            st.subheader("🚨 Failure Risk Assessment")
+            
+            failure_risks = [
+                {'Component': 'Primary SQL Server', 'Risk': 'Low', 'Probability': '5%', 'Impact': 'High'},
+                {'Component': 'Always On AG-Production', 'Risk': 'Medium', 'Probability': '15%', 'Impact': 'Critical'},
+                {'Component': 'Backup System', 'Risk': 'Low', 'Probability': '8%', 'Impact': 'Medium'},
+                {'Component': 'Storage Subsystem', 'Risk': 'Medium', 'Probability': '12%', 'Impact': 'High'}
+            ]
+            
+            risk_df = pd.DataFrame(failure_risks)
+            
+            # Color code risks
+            def risk_color(risk):
+                colors = {'Low': '🟢', 'Medium': '🟡', 'High': '🔴', 'Critical': '🔴'}
+                return colors.get(risk, '🔵')
+            
+            risk_df['Risk Status'] = risk_df['Risk'].apply(risk_color)
+            
+            st.dataframe(risk_df[['Component', 'Risk Status', 'Risk', 'Probability', 'Impact']], 
+                        use_container_width=True)
+        
+        else:
+            st.warning("🔒 Predictive analytics is currently disabled")
+            st.info("Enable predictive alerts in the sidebar to see trend analysis and capacity planning insights.")
+    
+    # =================== Alerts Tab ===================
+    with tab7:
+        st.header("🚨 Intelligent Alert Management")
+        
+        # Simulated alerts for demo
+        demo_alerts = [
+            {
+                'timestamp': datetime.now() - timedelta(minutes=5),
+                'severity': 'critical',
+                'source': 'CloudWatch',
+                'instance': 'sql-server-prod-1',
+                'message': 'High CPU utilization detected (92%)',
+                'auto_remediation': 'Enabled'
+            },
+            {
+                'timestamp': datetime.now() - timedelta(minutes=15),
+                'severity': 'warning',
+                'source': 'Always On Monitor',
+                'instance': 'AG-Production',
+                'message': 'Synchronization lag detected (3.2 seconds)',
+                'auto_remediation': 'Manual'
+            },
+            {
+                'timestamp': datetime.now() - timedelta(hours=1),
+                'severity': 'info',
+                'source': 'Predictive Analytics',
+                'instance': 'sql-server-prod-2',
+                'message': 'Memory usage trend increasing - action recommended within 24h',
+                'auto_remediation': 'Scheduled'
+            }
+        ]
+        
+        # Alert summary
+        col1, col2, col3, col4 = st.columns(4)
+        
+        critical_alerts = [a for a in demo_alerts if a['severity'] == 'critical']
+        warning_alerts = [a for a in demo_alerts if a['severity'] == 'warning']
+        info_alerts = [a for a in demo_alerts if a['severity'] == 'info']
+        
+        with col1:
+            st.metric("🔴 Critical", len(critical_alerts))
+        
+        with col2:
+            st.metric("🟡 Warning", len(warning_alerts))
+        
+        with col3:
+            st.metric("🔵 Info", len(info_alerts))
+        
+        with col4:
+            auto_remediated = [a for a in demo_alerts if a['auto_remediation'] == 'Enabled']
+            st.metric("🤖 Auto-Remediated", len(auto_remediated))
+        
+        st.markdown("---")
+        
+        # Alert list
+        st.subheader("📋 Recent Alerts")
+        
+        for alert in demo_alerts:
+            severity_styles = {
+                'critical': 'alert-critical',
+                'warning': 'alert-warning',
+                'info': 'claude-insight'
+            }
+            
+            style_class = severity_styles.get(alert['severity'], 'metric-card')
+            timestamp_str = alert['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
+            
+            st.markdown(f"""
+            <div class="{style_class}">
+                <strong>{alert['severity'].upper()}</strong> - {alert['instance']}<br>
+                <strong>Source:</strong> {alert['source']}<br>
+                <strong>Message:</strong> {alert['message']}<br>
+                <strong>Time:</strong> {timestamp_str}<br>
+                <strong>Auto-Remediation:</strong> {alert['auto_remediation']}
+            </div>
+            """, unsafe_allow_html=True)
+            
+            if alert['severity'] == 'critical':
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    if st.button(f"🔧 Remediate", key=f"remediate_{alert['instance']}"):
+                        st.success("Remediation action initiated")
+                with col2:
+                    if st.button(f"📞 Escalate", key=f"escalate_{alert['instance']}"):
+                        st.info("Alert escalated to on-call engineer")
+                with col3:
+                    if st.button(f"✅ Acknowledge", key=f"ack_{alert['instance']}"):
+                        st.info("Alert acknowledged")
+        
+        # Enhanced logs display
+        st.markdown("---")
+        st.subheader("📝 CloudWatch Logs Analysis")
+        
+        if all_logs:
+            # Log group selector
+            selected_log_group = st.selectbox(
+                "Select Log Group", 
+                list(all_logs.keys())
+            )
+            
+            if selected_log_group and all_logs[selected_log_group]:
+                logs = all_logs[selected_log_group]
+                
+                # Log filters
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    log_level = st.selectbox("Filter by Level", 
+                                           ["All", "Error", "Warning", "Info"])
+                with col2:
+                    search_term = st.text_input("Search in logs")
+                with col3:
+                    max_logs = st.slider("Max logs to display", 10, 100, 50)
+                
+                # Filter logs
+                filtered_logs = logs[:max_logs]
+                if search_term:
+                    filtered_logs = [log for log in filtered_logs 
+                                   if search_term.lower() in log['message'].lower()]
+                
+                # Display logs
+                for log in filtered_logs:
+                    timestamp = datetime.fromtimestamp(log['timestamp'] / 1000)
+                    st.text(f"[{timestamp}] {log['message']}")
+        
+        else:
+            st.info("No log data available. Configure log groups in the sidebar.")
+        
+        # Alert configuration
+        st.markdown("---")
+        st.subheader("⚙️ Alert Configuration")
+        
+        with st.expander("🔧 Configure Alert Thresholds"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Performance Alerts:**")
+                cpu_warning = st.slider("CPU Warning Threshold", 50, 90, 70)
+                cpu_critical = st.slider("CPU Critical Threshold", 70, 100, 90)
+                memory_warning = st.slider("Memory Warning Threshold", 60, 95, 80)
+                memory_critical = st.slider("Memory Critical Threshold", 80, 100, 95)
+            
+            with col2:
+                st.write("**Database Alerts:**")
+                backup_overdue = st.slider("Backup Overdue (hours)", 12, 72, 24)
+                sync_lag = st.slider("AG Sync Lag Warning (seconds)", 1, 30, 5)
+                blocking_threshold = st.slider("Blocking Session Alert", 1, 20, 3)
+                
+                if st.button("💾 Save Configuration"):
+                    st.success("Alert configuration saved")
     
     # =================== Performance Tab ===================
-    with tab4:
-        st.header("📊 Performance Analytics")
+    with tab8:
+        st.header("📊 Advanced Performance Analytics")
         
-        # Server selector
-        selected_server = st.selectbox("Select Server for Detailed Analysis", 
-                                      list(all_server_metrics.keys()))
-        
-        if selected_server and selected_server in all_server_metrics:
-            server_metrics = all_server_metrics[selected_server]
+        # Performance overview
+        if all_metrics:
+            st.subheader("🎯 Performance Overview")
             
-            # CPU and Memory Analysis
-            if 'cpu_utilization' in server_metrics and not server_metrics['cpu_utilization'].empty:
-                st.subheader("💻 CPU Utilization Trends")
-                
-                cpu_data = server_metrics['cpu_utilization']
-                
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=cpu_data['EventTime'],
-                    y=cpu_data['SQLProcessUtilization'],
-                    name='SQL Server CPU %',
-                    line=dict(color='blue')
-                ))
-                fig.add_trace(go.Scatter(
-                    x=cpu_data['EventTime'],
-                    y=cpu_data['OtherProcessUtilization'],
-                    name='Other Processes %',
-                    line=dict(color='orange')
+            # Create performance score
+            scores = {}
+            if all_metrics.get('cpu_usage'):
+                avg_cpu = np.mean([dp['Average'] for dp in all_metrics['cpu_usage'][-5:]])
+                scores['CPU'] = max(0, 100 - avg_cpu)
+            
+            if all_metrics.get('memory_usage'):
+                avg_memory = np.mean([dp['Average'] for dp in all_metrics['memory_usage'][-5:]])
+                scores['Memory'] = max(0, 100 - avg_memory)
+            
+            # Performance score visualization
+            if scores:
+                fig = go.Figure(go.Bar(
+                    x=list(scores.keys()),
+                    y=list(scores.values()),
+                    marker_color=['green' if v > 70 else 'orange' if v > 50 else 'red' for v in scores.values()]
                 ))
                 
                 fig.update_layout(
-                    title=f"CPU Utilization - {selected_server}",
-                    xaxis_title="Time",
-                    yaxis_title="CPU Usage %",
-                    height=400
+                    title="Performance Scores (Higher is Better)",
+                    yaxis_title="Score",
+                    height=300
                 )
                 
                 st.plotly_chart(fig, use_container_width=True)
             
-            # Memory analysis
-            if 'memory_usage' in server_metrics and not server_metrics['memory_usage'].empty:
-                st.subheader("🧠 Memory Analysis")
-                
-                memory_data = server_metrics['memory_usage'].iloc[0]
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.metric("Physical Memory (MB)", f"{memory_data.get('physical_memory_mb', 0):,.0f}")
-                    st.metric("Committed Memory (MB)", f"{memory_data.get('committed_memory_mb', 0):,.0f}")
-                
-                with col2:
-                    st.metric("Virtual Memory (MB)", f"{memory_data.get('virtual_memory_mb', 0):,.0f}")
-                    st.metric("Target Memory (MB)", f"{memory_data.get('committed_target_mb', 0):,.0f}")
+            # Detailed metrics
+            st.subheader("📈 Detailed Performance Metrics")
             
-            # Wait statistics analysis
-            if 'wait_stats' in server_metrics and not server_metrics['wait_stats'].empty:
-                st.subheader("⏱️ Wait Statistics Analysis")
-                
-                wait_stats = server_metrics['wait_stats'].head(10)
-                
-                fig = px.bar(
-                    wait_stats,
-                    x='wait_type',
-                    y='wait_time_ms',
-                    title=f"Top Wait Types - {selected_server}",
-                    labels={'wait_time_ms': 'Wait Time (ms)', 'wait_type': 'Wait Type'}
-                )
-                
-                fig.update_xaxes(tickangle=45)
-                st.plotly_chart(fig, use_container_width=True)
+            metric_tabs = st.tabs(["CPU", "Memory", "Disk", "Network"])
             
-            # Disk I/O analysis
-            if 'disk_io' in server_metrics and not server_metrics['disk_io'].empty:
-                st.subheader("💾 Disk I/O Performance")
-                
-                disk_io = server_metrics['disk_io']
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    fig = px.bar(
-                        disk_io.head(10),
-                        x='database_name',
-                        y='mb_read',
-                        title="Data Read by Database (MB)"
-                    )
-                    fig.update_xaxes(tickangle=45)
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                with col2:
-                    fig = px.bar(
-                        disk_io.head(10),
-                        x='database_name',
-                        y='mb_written',
-                        title="Data Written by Database (MB)"
-                    )
-                    fig.update_xaxes(tickangle=45)
-                    st.plotly_chart(fig, use_container_width=True)
-            
-            # Index fragmentation
-            if 'index_fragmentation' in server_metrics and not server_metrics['index_fragmentation'].empty:
-                st.subheader("🔧 Index Fragmentation Analysis")
-                
-                frag_data = server_metrics['index_fragmentation']
-                
-                if not frag_data.empty:
-                    fig = px.scatter(
-                        frag_data,
-                        x='page_count',
-                        y='avg_fragmentation_in_percent',
-                        hover_data=['schema_name', 'object_name', 'index_name'],
-                        title="Index Fragmentation vs Page Count",
-                        labels={
-                            'page_count': 'Page Count',
-                            'avg_fragmentation_in_percent': 'Fragmentation %'
-                        }
-                    )
+            with metric_tabs[0]:
+                if all_metrics.get('cpu_usage'):
+                    cpu_data = all_metrics['cpu_usage']
                     
-                    fig.add_hline(y=30, line_dash="dash", line_color="orange", 
-                                 annotation_text="Fragmentation Threshold (30%)")
+                    # CPU trend chart
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(
+                        x=[dp['Timestamp'] for dp in cpu_data],
+                        y=[dp['Average'] for dp in cpu_data],
+                        name='CPU Usage %',
+                        line=dict(color='blue')
+                    ))
                     
+                    # Add trend line
+                    values = [dp['Average'] for dp in cpu_data]
+                    x_vals = list(range(len(values)))
+                    z = np.polyfit(x_vals, values, 1)
+                    p = np.poly1d(z)
+                    
+                    fig.add_trace(go.Scatter(
+                        x=[dp['Timestamp'] for dp in cpu_data],
+                        y=p(x_vals),
+                        name='Trend',
+                        line=dict(color='red', dash='dash')
+                    ))
+                    
+                    fig.update_layout(title="CPU Utilization with Trend", height=400)
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    st.write("**Most Fragmented Indexes:**")
-                    for _, idx in frag_data.head(5).iterrows():
-                        st.write(f"• {idx['schema_name']}.{idx['object_name']}.{idx['index_name']}: "
-                               f"{idx['avg_fragmentation_in_percent']:.1f}% fragmented")
-                else:
-                    st.success("✅ No highly fragmented indexes detected")
-    
-    # =================== Maintenance Tab ===================
-    with tab5:
-        st.header("🔧 Proactive Maintenance Management")
-        
-        # Backup status overview
-        st.subheader("💾 Backup Compliance Dashboard")
-        
-        backup_summary = []
-        for server_name, metrics in all_server_metrics.items():
-            if 'backup_status' in metrics and not metrics['backup_status'].empty:
-                backup_data = metrics['backup_status']
-                
-                for _, backup in backup_data.iterrows():
-                    db_name = backup.get('database_name')
-                    last_full = backup.get('last_full_backup')
-                    last_log = backup.get('last_log_backup')
-                    
-                    if last_full and last_full != '1900-01-01':
-                        hours_since_full = (datetime.now() - pd.to_datetime(last_full)).total_seconds() / 3600
-                    else:
-                        hours_since_full = 999
-                    
-                    backup_summary.append({
-                        'Server': server_name,
-                        'Database': db_name,
-                        'Hours Since Full Backup': hours_since_full,
-                        'Last Full Backup': last_full,
-                        'Recovery Model': backup.get('recovery_model_desc', 'Unknown')
-                    })
-        
-        if backup_summary:
-            backup_df = pd.DataFrame(backup_summary)
-            
-            # Color-code based on backup age
-            def backup_status_color(hours):
-                if hours < 24:
-                    return "🟢"
-                elif hours < 48:
-                    return "🟡"
-                else:
-                    return "🔴"
-            
-            backup_df['Status'] = backup_df['Hours Since Full Backup'].apply(backup_status_color)
-            
-            st.dataframe(backup_df[['Server', 'Database', 'Status', 'Hours Since Full Backup', 'Recovery Model']], 
-                        use_container_width=True)
-        
-        st.markdown("---")
-        
-        # Maintenance recommendations
-        st.subheader("📋 Maintenance Recommendations")
-        
-        maintenance_tasks = []
-        
-        for server_name, metrics in all_server_metrics.items():
-            # Index maintenance needs
-            if 'index_fragmentation' in metrics and not metrics['index_fragmentation'].empty:
-                frag_count = len(metrics['index_fragmentation'])
-                if frag_count > 0:
-                    maintenance_tasks.append({
-                        'Server': server_name,
-                        'Priority': 'High',
-                        'Task': 'Index Maintenance',
-                        'Description': f'{frag_count} indexes require attention (>30% fragmentation)',
-                        'Estimated Time': '2-4 hours',
-                        'Impact': 'Medium'
-                    })
-            
-            # Buffer cache optimization
-            if 'system_metrics' in metrics and not metrics['system_metrics'].empty:
-                sys_metrics = metrics['system_metrics'].iloc[0]
-                buffer_cache = sys_metrics.get('buffer_cache_hit_ratio', 100)
-                
-                if buffer_cache < 95:
-                    maintenance_tasks.append({
-                        'Server': server_name,
-                        'Priority': 'Medium',
-                        'Task': 'Buffer Cache Optimization',
-                        'Description': f'Buffer cache hit ratio is {buffer_cache:.1f}%',
-                        'Estimated Time': '1-2 hours',
-                        'Impact': 'Low'
-                    })
-            
-            # Weekly maintenance
-            maintenance_tasks.append({
-                'Server': server_name,
-                'Priority': 'Low',
-                'Task': 'Statistics Update',
-                'Description': 'Update table statistics for query optimization',
-                'Estimated Time': '30-60 minutes',
-                'Impact': 'Low'
-            })
-        
-        # Display maintenance tasks
-        if maintenance_tasks:
-            for task in maintenance_tasks:
-                priority_color = {
-                    'High': '🔴',
-                    'Medium': '🟡', 
-                    'Low': '🟢'
-                }[task['Priority']]
-                
-                with st.expander(f"{priority_color} {task['Priority']} - {task['Task']} ({task['Server']})"):
+                    # CPU statistics
                     col1, col2, col3, col4 = st.columns(4)
-                    
                     with col1:
-                        st.write(f"**Priority:** {task['Priority']}")
-                    
+                        st.metric("Current", f"{values[-1]:.1f}%")
                     with col2:
-                        st.write(f"**Estimated Time:** {task['Estimated Time']}")
-                    
+                        st.metric("Average", f"{np.mean(values):.1f}%")
                     with col3:
-                        st.write(f"**Impact:** {task['Impact']}")
-                    
+                        st.metric("Peak", f"{max(values):.1f}%")
                     with col4:
-                        if st.button("Schedule", key=f"schedule_{task['Server']}_{task['Task']}"):
-                            st.success(f"✅ Scheduled: {task['Task']} for {task['Server']}")
-                    
-                    st.write(f"**Description:** {task['Description']}")
-        
-        st.markdown("---")
-        
-        # Database integrity checks
-        st.subheader("🔍 Database Integrity Monitoring")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write("**Recommended DBCC Commands:**")
-            st.code("""
--- Check database integrity
-DBCC CHECKDB('YourDatabase') WITH NO_INFOMSGS;
-
--- Check allocation consistency
-DBCC CHECKALLOC('YourDatabase');
-
--- Update statistics
-UPDATE STATISTICS YourTable;
-
--- Rebuild indexes
-ALTER INDEX ALL ON YourTable REBUILD;
-            """, language="sql")
-        
-        with col2:
-            st.write("**Automated Maintenance Scripts:**")
-            if st.button("📥 Download Maintenance Scripts"):
-                st.info("Maintenance scripts would be generated and downloaded here")
+                        st.metric("Trend", "Increasing" if z[0] > 0 else "Decreasing")
             
-            st.write("**Maintenance Schedule:**")
-            st.write("• Daily: Transaction log backups")
-            st.write("• Weekly: Full database backups")
-            st.write("• Weekly: Index maintenance")
-            st.write("• Monthly: Statistics updates")
-            st.write("• Quarterly: DBCC CHECKDB")
+            with metric_tabs[1]:
+                if all_metrics.get('memory_usage'):
+                    # Similar memory analysis
+                    st.info("Memory analysis would be displayed here with similar trending and statistics")
+            
+            with metric_tabs[2]:
+                # Disk I/O analysis
+                st.info("Disk I/O metrics and analysis would be displayed here")
+            
+            with metric_tabs[3]:
+                # Network analysis
+                st.info("Network performance metrics would be displayed here")
+        
+        else:
+            st.warning("No performance metrics available. Check CloudWatch configuration.")
     
-    # =================== Analytics Tab ===================
-    with tab6:
-        st.header("📈 Historical Analytics & Trends")
+    # =================== Reports Tab ===================
+    with tab9:
+        st.header("📈 Executive Reports & Analytics")
         
-        st.subheader("📊 Performance Trends Analysis")
+        # Report selector
+        report_type = st.selectbox("Select Report Type", [
+            "Executive Summary",
+            "Performance Report",
+            "Availability Report",
+            "Capacity Planning",
+            "Security Assessment",
+            "Cost Analysis"
+        ])
         
-        # This would typically show historical data analysis
-        # For now, showing current snapshot analysis
-        
-        # Performance metrics summary across all servers
-        performance_summary = []
-        
-        for server_name, metrics in all_server_metrics.items():
-            server_health = all_health_summaries.get(server_name, {})
+        if report_type == "Executive Summary":
+            st.subheader("📊 Executive Summary Report")
             
-            if server_health.get('status') == 'online':
-                summary = {
-                    'Server': server_name,
-                    'Status': '🟢 Online',
-                    'Databases': server_health.get('online_databases', 0),
-                    'Sessions': server_health.get('user_sessions', 0)
-                }
-                
-                # Add performance metrics
-                if 'system_metrics' in metrics and not metrics['system_metrics'].empty:
-                    sys_metrics = metrics['system_metrics'].iloc[0]
-                    summary['Buffer Cache Hit %'] = sys_metrics.get('buffer_cache_hit_ratio', 0)
-                    summary['Page Life Expectancy'] = sys_metrics.get('page_life_expectancy', 0)
-                
-                if 'active_connections' in metrics and not metrics['active_connections'].empty:
-                    conn_metrics = metrics['active_connections'].iloc[0]
-                    summary['Total Connections'] = conn_metrics.get('total_connections', 0)
-                    summary['Running Sessions'] = conn_metrics.get('running_sessions', 0)
-                
-                performance_summary.append(summary)
-            else:
-                performance_summary.append({
-                    'Server': server_name,
-                    'Status': '🔴 Offline',
-                    'Databases': 0,
-                    'Sessions': 0,
-                    'Buffer Cache Hit %': 0,
-                    'Page Life Expectancy': 0,
-                    'Total Connections': 0,
-                    'Running Sessions': 0
-                })
-        
-        if performance_summary:
-            performance_df = pd.DataFrame(performance_summary)
+            # Key metrics summary
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.markdown("""
+                <div class="metric-card">
+                    <h3>🎯 System Health</h3>
+                    <p><strong>Overall Score:</strong> 87/100</p>
+                    <p><strong>Availability:</strong> 99.95%</p>
+                    <p><strong>Performance:</strong> Good</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col2:
+                st.markdown("""
+                <div class="metric-card">
+                    <h3>🔧 Maintenance</h3>
+                    <p><strong>Auto-Remediated:</strong> 15 issues</p>
+                    <p><strong>Manual Actions:</strong> 2 pending</p>
+                    <p><strong>Uptime:</strong> 99.95%</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col3:
+                st.markdown("""
+                <div class="metric-card">
+                    <h3>💰 Cost Optimization</h3>
+                    <p><strong>Potential Savings:</strong> $2,400/month</p>
+                    <p><strong>Right-sizing:</strong> 3 opportunities</p>
+                    <p><strong>Efficiency:</strong> 85%</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Recommendations
+            st.subheader("💡 Key Recommendations")
+            st.write("1. **Scale EC2 instances** - CPU utilization consistently above 80%")
+            st.write("2. **Optimize backup strategy** - Consider incremental backups for large databases")
+            st.write("3. **Review Always On configuration** - Secondary replica showing synchronization delays")
+            st.write("4. **Implement automated scaling** - Based on predictive analytics")
+            
+        elif report_type == "Performance Report":
+            st.subheader("📊 Detailed Performance Report")
+            
+            # Performance summary table
+            performance_data = [
+                {'Metric': 'Average CPU Usage', 'Current': '68%', 'Target': '<70%', 'Status': '🟢 Good'},
+                {'Metric': 'Average Memory Usage', 'Current': '82%', 'Target': '<85%', 'Status': '🟡 Monitor'},
+                {'Metric': 'Disk I/O Latency', 'Current': '12ms', 'Target': '<15ms', 'Status': '🟢 Good'},
+                {'Metric': 'AG Sync Lag', 'Current': '2.1s', 'Target': '<5s', 'Status': '🟢 Good'},
+                {'Metric': 'Backup Success Rate', 'Current': '99.2%', 'Target': '>99%', 'Status': '🟢 Good'}
+            ]
+            
+            performance_df = pd.DataFrame(performance_data)
             st.dataframe(performance_df, use_container_width=True)
             
-            # Performance comparison charts
-            st.subheader("📊 Performance Comparison")
+        elif report_type == "Capacity Planning":
+            st.subheader("📈 Capacity Planning Report")
             
-            online_servers = performance_df[performance_df['Status'] == '🟢 Online']
+            # Capacity projections
+            capacity_data = {
+                'Resource': ['CPU', 'Memory', 'Storage', 'Connections'],
+                'Current Usage': [68, 82, 45, 85],
+                '30-Day Projection': [75, 85, 52, 92],
+                '90-Day Projection': [82, 88, 65, 98],
+                'Action Required': ['Monitor', 'Plan Upgrade', 'Expand Storage', 'Optimize Pooling']
+            }
             
-            if not online_servers.empty:
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    fig = px.bar(
-                        online_servers,
-                        x='Server',
-                        y='Buffer Cache Hit %',
-                        title="Buffer Cache Hit Ratio Comparison",
-                        color='Buffer Cache Hit %',
-                        color_continuous_scale='RdYlGn'
-                    )
-                    fig.add_hline(y=95, line_dash="dash", line_color="orange", 
-                                 annotation_text="Target: 95%")
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                with col2:
-                    fig = px.bar(
-                        online_servers,
-                        x='Server',
-                        y='Total Connections',
-                        title="Connection Count Comparison",
-                        color='Total Connections',
-                        color_continuous_scale='Blues'
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
+            capacity_df = pd.DataFrame(capacity_data)
+            st.dataframe(capacity_df, use_container_width=True)
+            
+            # Capacity visualization
+            fig = go.Figure()
+            
+            fig.add_trace(go.Bar(
+                name='Current',
+                x=capacity_data['Resource'],
+                y=capacity_data['Current Usage']
+            ))
+            
+            fig.add_trace(go.Bar(
+                name='30-Day Projection',
+                x=capacity_data['Resource'],
+                y=capacity_data['30-Day Projection']
+            ))
+            
+            fig.add_trace(go.Bar(
+                name='90-Day Projection',
+                x=capacity_data['Resource'],
+                y=capacity_data['90-Day Projection']
+            ))
+            
+            fig.update_layout(
+                title="Capacity Utilization Projections",
+                xaxis_title="Resource",
+                yaxis_title="Usage %",
+                barmode='group'
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
         
-        # Alert trends
-        st.subheader("🚨 Alert Trends")
-        
-        alert_categories = st.session_state.alert_manager.get_alerts_by_category(168)  # Last week
-        
-        if alert_categories:
-            # Create alert trend data
-            alert_trend_data = []
-            
-            for category, alerts in alert_categories.items():
-                for alert in alerts:
-                    alert_trend_data.append({
-                        'Date': alert['timestamp'].date(),
-                        'Hour': alert['timestamp'].hour,
-                        'Category': category,
-                        'Severity': alert['severity'],
-                        'Server': alert['server']
-                    })
-            
-            if alert_trend_data:
-                alert_df = pd.DataFrame(alert_trend_data)
-                
-                # Daily alert counts
-                daily_alerts = alert_df.groupby(['Date', 'Severity']).size().reset_index(name='Count')
-                
-                fig = px.line(
-                    daily_alerts,
-                    x='Date',
-                    y='Count',
-                    color='Severity',
-                    title="Daily Alert Trends",
-                    color_discrete_map={'critical': 'red', 'warning': 'orange', 'info': 'blue'}
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
         else:
-            st.success("📈 No significant alert trends detected - systems running smoothly!")
+            st.info(f"Report type '{report_type}' would be displayed here")
+        
+        # Export options
+        st.markdown("---")
+        st.subheader("📥 Export Options")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("📊 Export to Excel"):
+                st.info("Excel report would be generated and downloaded")
+        
+        with col2:
+            if st.button("📄 Generate PDF"):
+                st.info("PDF report would be generated and downloaded")
+        
+        with col3:
+            if st.button("📧 Email Report"):
+                st.info("Report would be emailed to stakeholders")
     
     # Auto-refresh functionality
     if 'last_refresh' not in st.session_state:

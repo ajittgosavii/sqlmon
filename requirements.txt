@@ -20,13 +20,16 @@ anthropic>=0.8.0
 # HTTP requests for API calls
 requests>=2.31.0
 
+# AWS integrations - Enhanced for CloudWatch monitoring
+boto3>=1.34.0
+botocore>=1.34.0
+
+# Optional: Enhanced AWS performance and retry logic
+# boto3[crt]>=1.34.0  # Uncomment for better AWS performance
+
 # Optional: For enhanced data processing (if you plan to add file upload features)
 openpyxl>=3.1.0
 xlsxwriter>=3.1.0
-
-# Optional: For AWS integrations (if you plan to integrate with AWS APIs)
-boto3>=1.34.0
-botocore>=1.34.0
 
 # Optional: For more advanced calculations (if you add complex mathematical models)
 scipy>=1.11.0
@@ -59,3 +62,29 @@ structlog>=23.1.0
 # For async operations (if needed)
 aiofiles>=23.2.0
 asyncio-throttle>=1.0.2
+
+# Optional: Enhanced AWS CloudWatch and Systems Manager support
+# watchtower>=3.0.1  # CloudWatch log handler
+# aws-sam-cli>=1.100.0  # For Lambda deployment if using serverless components
+
+# Optional: Time series analysis for predictive analytics
+# statsmodels>=0.14.0  # Advanced statistical models
+# prophet>=1.1.4  # Facebook Prophet for forecasting
+
+# Optional: Enhanced data validation and monitoring
+# pydantic>=2.4.0  # Data validation
+# great-expectations>=0.17.0  # Data quality monitoring
+
+# Optional: Cache optimization for large datasets
+# redis>=5.0.0  # Redis caching
+# streamlit-cache>=0.1.0  # Enhanced caching
+
+# Enhanced AWS performance (optional)
+boto3[crt]>=1.34.0  # 20-30% faster AWS operations
+
+# Advanced time series forecasting (optional)
+statsmodels>=0.14.0  # Better predictive analytics
+prophet>=1.1.4      # Facebook Prophet for forecasting
+
+# Enhanced CloudWatch integration (optional)
+watchtower>=3.0.1   # Direct CloudWatch log streaming
