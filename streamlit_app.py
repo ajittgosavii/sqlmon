@@ -292,37 +292,102 @@ class StreamlitAWSManager:
         return True
     
     def _test_session(self, session, method_name: str) -> bool:
-        """Test AWS session with comprehensive checks"""
+        """Test AWS session with detailed error reporting and debugging"""
         try:
-            config = Config(
-                region_name=session.region_name or 'us-east-1',
-                retries={'max_attempts': 2, 'mode': 'standard'},
-                max_pool_connections=10,
-                read_timeout=30,
-                connect_timeout=30
-            )
-            
-            sts_client = session.client('sts', config=config)
-            identity = sts_client.get_caller_identity()
-            
-            self.connection_status.update({
-                'account_id': identity.get('Account'),
-                'user_arn': identity.get('Arn'),
-                'region': session.region_name,
-                'last_test': datetime.now()
-            })
-            
-            cloudwatch_client = session.client('cloudwatch', config=config)
-            cloudwatch_client.list_metrics(MaxRecords=1)
-            
-            return True
-            
+            # Show debug info in the UI
+            with st.container():
+                st.write(f"🧪 **Testing {method_name} session...**")
+                
+                config = Config(
+                    region_name=session.region_name or 'us-east-1',
+                    retries={'max_attempts': 2, 'mode': 'standard'},
+                    max_pool_connections=10,
+                    read_timeout=30,
+                    connect_timeout=30
+                )
+                
+                # Test STS first (most basic AWS service)
+                st.write("🔄 Creating STS client...")
+                sts_client = session.client('sts', config=config)
+                
+                st.write("🔄 Calling sts.get_caller_identity()...")
+                identity = sts_client.get_caller_identity()
+                
+                st.success(f"✅ **STS Success!**")
+                st.write(f"📋 **Account ID:** {identity.get('Account')}")
+                st.write(f"👤 **User ARN:** {identity.get('Arn')}")
+                st.write(f"🌍 **Region:** {session.region_name}")
+                
+                # Store account information
+                self.connection_status.update({
+                    'account_id': identity.get('Account'),
+                    'user_arn': identity.get('Arn'),
+                    'region': session.region_name,
+                    'last_test': datetime.now()
+                })
+                
+                # Test CloudWatch access
+                st.write("🔄 Testing CloudWatch access...")
+                try:
+                    cloudwatch_client = session.client('cloudwatch', config=config)
+                    cloudwatch_client.list_metrics(MaxRecords=1)
+                    st.success("✅ CloudWatch access confirmed")
+                except ClientError as cw_e:
+                    st.warning(f"⚠️ CloudWatch access limited: {cw_e.response['Error']['Code']}")
+                    st.info("💡 This is OK - basic functionality will still work")
+                except Exception as cw_e:
+                    st.warning(f"⚠️ CloudWatch test failed: {str(cw_e)}")
+                
+                return True
+                
         except ClientError as e:
             error_code = e.response['Error']['Code']
-            self.connection_status['error'] = f"AWS Error ({error_code}): {e.response['Error']['Message']}"
+            error_message = e.response['Error']['Message']
+            
+            # Show detailed error in the UI
+            with st.container():
+                st.error(f"❌ **AWS ClientError: {error_code}**")
+                st.error(f"📝 **Message:** {error_message}")
+                
+                # Show specific error help
+                if error_code == "InvalidUserID.NotFound":
+                    st.error("🔑 **Issue:** Your AWS Access Key ID is invalid or the user was deleted")
+                    st.info("💡 **Fix:** Check your AWS Access Key ID in the AWS Console")
+                elif error_code == "SignatureDoesNotMatch":
+                    st.error("🔑 **Issue:** Your AWS Secret Access Key is incorrect")
+                    st.info("💡 **Fix:** Check your AWS Secret Access Key in the AWS Console")
+                elif error_code == "AccessDenied":
+                    st.error("🔒 **Issue:** Your user doesn't have sts:GetCallerIdentity permission")
+                    st.info("💡 **Fix:** Ask your AWS admin to add IAM permissions")
+                elif error_code == "TokenRefreshRequired":
+                    st.error("⏰ **Issue:** Your AWS credentials have expired")
+                    st.info("💡 **Fix:** Generate new AWS credentials")
+                else:
+                    st.error(f"❓ **Unknown AWS Error:** {error_code}")
+                
+                # Show the full error details
+                with st.expander("🔍 Full Error Details"):
+                    st.json(e.response)
+            
+            self.connection_status['error'] = f"{error_code}: {error_message}"
             return False
+            
         except Exception as e:
-            self.connection_status['error'] = f"Connection test failed ({method_name}): {str(e)}"
+            # Show unexpected errors
+            with st.container():
+                st.error(f"❌ **Unexpected Error:** {str(e)}")
+                st.error(f"📝 **Error Type:** {type(e).__name__}")
+                
+                # Show more details for debugging
+                with st.expander("🔍 Technical Details"):
+                    st.code(f"""
+    Error Type: {type(e).__name__}
+    Error Message: {str(e)}
+    Method: {method_name}
+    Region: {session.region_name if session else 'Unknown'}
+                    """)
+            
+            self.connection_status['error'] = f"Unexpected error: {str(e)}"
             return False
     
     def _initialize_clients(self):
