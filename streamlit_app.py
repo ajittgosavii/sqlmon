@@ -141,11 +141,18 @@ class AWSCloudWatchConnector:
         
         try:
             # Initialize AWS clients
-            self.session = boto3.Session(
-                aws_access_key_id=aws_config.get('access_key'),
-                aws_secret_access_key=aws_config.get('secret_key'),
-                region_name=aws_config.get('region', 'us-east-1')
-            )
+            # Try using profile first, then explicit credentials
+            if aws_config.get('use_profile', False):
+                self.session = boto3.Session(
+                    profile_name=aws_config.get('profile_name', 'default'),
+                    region_name=aws_config.get('region', 'us-east-1')
+                )
+            else:
+                self.session = boto3.Session(
+                    aws_access_key_id=aws_config.get('access_key'),
+                    aws_secret_access_key=aws_config.get('secret_key'),
+                    region_name=aws_config.get('region', 'us-east-1')
+                )
             
             self.cloudwatch = self.session.client('cloudwatch')
             self.logs = self.session.client('logs')
@@ -161,16 +168,66 @@ class AWSCloudWatchConnector:
             self.demo_mode = True
     
     def test_connection(self) -> bool:
-        """Test AWS connection"""
+        """Test AWS connection with detailed error reporting"""
         if self.demo_mode:
             return True
         
         try:
-            # Test CloudWatch connection - FIXED: removed invalid MaxRecords parameter
+            # First test: Get caller identity (most basic AWS call)
+            sts = self.session.client('sts')
+            identity = sts.get_caller_identity()
+            st.success(f"✅ STS Connection successful!")
+            st.info(f"Account: {identity.get('Account')}, User: {identity.get('Arn', 'Unknown')}")
+            
+            # Second test: CloudWatch list metrics
             self.cloudwatch.list_metrics()
+            st.success(f"✅ CloudWatch Connection successful!")
             return True
+            
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            error_msg = e.response['Error']['Message']
+            
+            st.error(f"❌ AWS API Error: {error_code}")
+            st.error(f"Message: {error_msg}")
+            
+            # Provide specific guidance based on error type
+            if error_code == 'InvalidClientTokenId':
+                st.error("🔍 **Credential Issue**: Your Access Key ID is invalid or doesn't exist")
+                st.markdown("""
+                **Solutions:**
+                1. **Double-check Access Key ID** (should start with `AKIA`)
+                2. **Verify it's not expired** in AWS Console → IAM
+                3. **Create new credentials** if needed
+                4. **Remove any extra spaces** from the key
+                """)
+            elif error_code == 'SignatureDoesNotMatch':
+                st.error("🔍 **Secret Key Issue**: Your Secret Access Key is incorrect")
+                st.markdown("""
+                **Solutions:**
+                1. **Re-enter Secret Key** carefully
+                2. **Create new credentials** (secret keys can't be recovered)
+                3. **Check for copy/paste errors**
+                """)
+            elif error_code == 'TokenRefreshRequired':
+                st.error("🔍 **Token Expired**: Your session token has expired")
+            elif error_code == 'AccessDenied':
+                st.error("🔍 **Permission Issue**: Your credentials lack required permissions")
+                st.markdown("""
+                **Required Permissions:**
+                - `sts:GetCallerIdentity`
+                - `cloudwatch:ListMetrics`
+                - `cloudwatch:GetMetricStatistics`
+                """)
+            
+            return False
+            
+        except BotoCoreError as e:
+            st.error(f"❌ AWS Configuration Error: {str(e)}")
+            return False
+            
         except Exception as e:
-            st.error(f"AWS connection test failed: {str(e)}")
+            st.error(f"❌ Unexpected Error: {str(e)}")
             return False
     
     def get_cloudwatch_metrics(self, metric_queries: List[Dict], 
@@ -1667,8 +1724,27 @@ def main():
         
         # AWS Configuration
         st.subheader("🔑 AWS Credentials")
-        aws_access_key = st.text_input("AWS Access Key ID", type="password")
-        aws_secret_key = st.text_input("AWS Secret Access Key", type="password")
+        
+        # Authentication method selector
+        auth_method = st.radio("Authentication Method", 
+                              ["Access Keys", "AWS Profile"], 
+                              help="Choose how to authenticate with AWS")
+        
+        if auth_method == "Access Keys":
+            aws_access_key = st.text_input("AWS Access Key ID", type="password", 
+                                          help="Your AWS Access Key ID (starts with AKIA)")
+            aws_secret_key = st.text_input("AWS Secret Access Key", type="password",
+                                          help="Your AWS Secret Access Key (~40 characters)")
+            use_profile = False
+            profile_name = None
+        else:
+            st.info("💡 Using AWS Profile authentication. Ensure AWS CLI is configured with `aws configure`")
+            profile_name = st.text_input("Profile Name", value="default", 
+                                        help="AWS CLI profile name (default: 'default')")
+            aws_access_key = None
+            aws_secret_key = None
+            use_profile = True
+        
         aws_region = st.selectbox("AWS Region", [
             'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
             'eu-west-1', 'eu-central-1', 'ap-southeast-1', 'ap-northeast-1'
@@ -1719,10 +1795,12 @@ def main():
         )
 
         # Update the aws_config dictionary if credentials are provided
-        if aws_access_key and aws_secret_key:
+        if (auth_method == "Access Keys" and aws_access_key and aws_secret_key) or (auth_method == "AWS Profile"):
             aws_config.update({
                 'access_key': aws_access_key,
                 'secret_key': aws_secret_key,
+                'use_profile': use_profile,
+                'profile_name': profile_name,
                 'region': aws_region,
                 'account_id': aws_account_id,
                 'account_name': aws_account_name,
@@ -1739,10 +1817,120 @@ def main():
                 st.session_state.predictive_analytics = PredictiveAnalyticsEngine(st.session_state.cloudwatch_connector)
             
             if st.button("🔌 Test AWS Connection"):
+                # Show what credentials are being used (safely)
+                if auth_method == "Access Keys":
+                    if aws_access_key and aws_secret_key:
+                        st.info(f"Testing with Access Key: {aws_access_key[:4]}...{aws_access_key[-4:]} (length: {len(aws_access_key)})")
+                        st.info(f"Secret Key length: {len(aws_secret_key)} characters")
+                        st.info(f"Region: {aws_region}")
+                    else:
+                        st.error("❌ Please enter both Access Key ID and Secret Access Key")
+                        st.stop()
+                else:
+                    st.info(f"Testing with AWS Profile: {profile_name}")
+                    st.info(f"Region: {aws_region}")
+                
+                # Perform the connection test
                 if st.session_state.cloudwatch_connector.test_connection():
-                    st.success("✅ AWS Connected")
+                    st.success("✅ AWS Connected Successfully!")
                 else:
                     st.error("❌ AWS Connection Failed")
+                    
+                    # Additional debugging section
+                    with st.expander("🔧 Advanced Troubleshooting", expanded=True):
+                        st.markdown("""
+                        ### 🔍 Debug Steps:
+                        
+                        **1. Verify Credential Format:**
+                        - Access Key: Exactly 20 characters, starts with `AKIA`
+                        - Secret Key: Exactly 40 characters
+                        - No spaces before/after the keys
+                        
+                        **2. Test Outside Streamlit:**
+                        ```bash
+                        # Install AWS CLI
+                        pip install awscli
+                        
+                        # Test your credentials
+                        aws sts get-caller-identity --region us-east-1
+                        ```
+                        
+                        **3. Create Fresh Credentials:**
+                        - AWS Console → IAM → Users → [Your User]
+                        - Security credentials tab
+                        - "Create access key" button
+                        - **Important**: Copy the secret immediately (only shown once!)
+                        
+                        **4. Check IAM Permissions:**
+                        Your user needs at minimum:
+                        ```json
+                        {
+                            "Version": "2012-10-17", 
+                            "Statement": [{
+                                "Effect": "Allow",
+                                "Action": [
+                                    "sts:GetCallerIdentity",
+                                    "cloudwatch:ListMetrics"
+                                ],
+                                "Resource": "*"
+                            }]
+                        }
+                        ```
+                        
+                        **5. Alternative: Use AWS Profile**
+                        ```bash
+                        aws configure
+                        # Enter credentials once, then use "AWS Profile" option above
+                        ```
+                        """)
+                        
+                        # Credential validation
+                        if auth_method == "Access Keys" and aws_access_key and aws_secret_key:
+                            st.subheader("🔍 Credential Analysis:")
+                            
+                            # Access Key validation
+                            if aws_access_key.startswith('AKIA'):
+                                st.success(f"✅ Access Key format looks correct")
+                            else:
+                                st.error(f"❌ Access Key should start with 'AKIA', yours starts with '{aws_access_key[:4]}'")
+                            
+                            if len(aws_access_key) == 20:
+                                st.success(f"✅ Access Key length is correct (20 chars)")
+                            else:
+                                st.error(f"❌ Access Key should be 20 characters, yours is {len(aws_access_key)}")
+                            
+                            # Secret Key validation  
+                            if len(aws_secret_key) == 40:
+                                st.success(f"✅ Secret Key length is correct (40 chars)")
+                            else:
+                                st.error(f"❌ Secret Key should be 40 characters, yours is {len(aws_secret_key)}")
+                            
+                            # Check for common issues
+                            if ' ' in aws_access_key or ' ' in aws_secret_key:
+                                st.error("❌ Detected spaces in credentials - please remove them")
+                            
+                            if aws_access_key != aws_access_key.strip() or aws_secret_key != aws_secret_key.strip():
+                                st.error("❌ Detected leading/trailing spaces - please trim them")
+        
+        # Enhanced credential validation hints
+        if auth_method == "Access Keys":
+            if aws_access_key:
+                if not aws_access_key.startswith('AKIA'):
+                    st.error("❌ Access Key should start with 'AKIA'")
+                elif len(aws_access_key) != 20:
+                    st.error(f"❌ Access Key should be 20 characters (current: {len(aws_access_key)})")
+                elif ' ' in aws_access_key:
+                    st.error("❌ Access Key contains spaces")
+                else:
+                    st.success("✅ Access Key format looks good")
+            
+            if aws_secret_key:
+                if len(aws_secret_key) != 40:
+                    st.error(f"❌ Secret Key should be 40 characters (current: {len(aws_secret_key)})")
+                elif ' ' in aws_secret_key:
+                    st.error("❌ Secret Key contains spaces") 
+                else:
+                    st.success("✅ Secret Key length looks good")
         
         st.markdown("---")
         
