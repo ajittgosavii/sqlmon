@@ -52,8 +52,8 @@ warnings.filterwarnings('ignore')
     
 
     # Configure logging
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
     # Configure Streamlit page
     st.set_page_config(
