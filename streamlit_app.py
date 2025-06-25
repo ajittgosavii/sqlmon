@@ -292,141 +292,141 @@ class StreamlitAWSManager:
         return True
     
     def _test_session(self, session, method_name: str) -> bool:
-    """Test AWS session with detailed error reporting and debugging"""
-    try:
-        # Show debug info in the UI
-        with st.container():
-            st.write(f"🧪 **Testing {method_name} session...**")
+        """Test AWS session with detailed error reporting and debugging"""
+        try:
+            # Show debug info in the UI
+            with st.container():
+                st.write(f"🧪 **Testing {method_name} session...**")
+                
+                config = Config(
+                    region_name=session.region_name or 'us-east-1',
+                    retries={'max_attempts': 2, 'mode': 'standard'},
+                    max_pool_connections=10,
+                    read_timeout=30,
+                    connect_timeout=30
+                )
+                
+                # Test STS first (most basic AWS service)
+                st.write("🔄 Creating STS client...")
+                sts_client = session.client('sts', config=config)
+                
+                st.write("🔄 Calling sts.get_caller_identity()...")
+                identity = sts_client.get_caller_identity()
+                
+                st.success(f"✅ **STS Success!**")
+                st.write(f"📋 **Account ID:** {identity.get('Account')}")
+                st.write(f"👤 **User ARN:** {identity.get('Arn')}")
+                st.write(f"🌍 **Region:** {session.region_name}")
+                
+                # Store account information
+                self.connection_status.update({
+                    'account_id': identity.get('Account'),
+                    'user_arn': identity.get('Arn'),
+                    'region': session.region_name,
+                    'last_test': datetime.now()
+                })
+                
+                # Test CloudWatch access (FIXED - removed MaxRecords parameter)
+                st.write("🔄 Testing CloudWatch access...")
+                try:
+                    cloudwatch_client = session.client('cloudwatch', config=config)
+                    # Fixed: list_metrics doesn't have MaxRecords parameter
+                    response = cloudwatch_client.list_metrics()
+                    metrics_count = len(response.get('Metrics', []))
+                    st.success(f"✅ CloudWatch access confirmed - found {metrics_count} metrics")
+                except ClientError as cw_e:
+                    error_code = cw_e.response['Error']['Code']
+                    st.warning(f"⚠️ CloudWatch access limited: {error_code}")
+                    if error_code == "AccessDenied":
+                        st.info("💡 Need cloudwatch:ListMetrics permission - but basic functionality will still work")
+                    else:
+                        st.info("💡 CloudWatch permissions limited - but basic functionality will still work")
+                except Exception as cw_e:
+                    st.warning(f"⚠️ CloudWatch test failed: {str(cw_e)}")
+                
+                # Test EC2 access
+                st.write("🔄 Testing EC2 access...")
+                try:
+                    ec2_client = session.client('ec2', config=config)
+                    # Fixed: Use correct parameter name for EC2
+                    response = ec2_client.describe_instances(MaxResults=5)
+                    total_instances = sum(len(r['Instances']) for r in response['Reservations'])
+                    st.success(f"✅ EC2 access confirmed - found {total_instances} instances")
+                except ClientError as ec2_e:
+                    error_code = ec2_e.response['Error']['Code']
+                    st.warning(f"⚠️ EC2 access limited: {error_code}")
+                    if error_code == "UnauthorizedOperation":
+                        st.info("💡 Need ec2:DescribeInstances permission")
+                except Exception as ec2_e:
+                    st.info(f"ℹ️ EC2 test skipped: {str(ec2_e)}")
+                
+                # Test RDS access
+                st.write("🔄 Testing RDS access...")
+                try:
+                    rds_client = session.client('rds', config=config)
+                    # Fixed: Use correct parameter name for RDS
+                    response = rds_client.describe_db_instances(MaxRecords=5)
+                    db_count = len(response.get('DBInstances', []))
+                    st.success(f"✅ RDS access confirmed - found {db_count} DB instances")
+                except ClientError as rds_e:
+                    error_code = rds_e.response['Error']['Code']
+                    st.warning(f"⚠️ RDS access limited: {error_code}")
+                    if error_code == "AccessDenied":
+                        st.info("💡 Need rds:DescribeDBInstances permission")
+                except Exception as rds_e:
+                    st.info(f"ℹ️ RDS test skipped: {str(rds_e)}")
+                
+                return True
+                
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            error_message = e.response['Error']['Message']
             
-            config = Config(
-                region_name=session.region_name or 'us-east-1',
-                retries={'max_attempts': 2, 'mode': 'standard'},
-                max_pool_connections=10,
-                read_timeout=30,
-                connect_timeout=30
-            )
-            
-            # Test STS first (most basic AWS service)
-            st.write("🔄 Creating STS client...")
-            sts_client = session.client('sts', config=config)
-            
-            st.write("🔄 Calling sts.get_caller_identity()...")
-            identity = sts_client.get_caller_identity()
-            
-            st.success(f"✅ **STS Success!**")
-            st.write(f"📋 **Account ID:** {identity.get('Account')}")
-            st.write(f"👤 **User ARN:** {identity.get('Arn')}")
-            st.write(f"🌍 **Region:** {session.region_name}")
-            
-            # Store account information
-            self.connection_status.update({
-                'account_id': identity.get('Account'),
-                'user_arn': identity.get('Arn'),
-                'region': session.region_name,
-                'last_test': datetime.now()
-            })
-            
-            # Test CloudWatch access (FIXED - removed MaxRecords parameter)
-            st.write("🔄 Testing CloudWatch access...")
-            try:
-                cloudwatch_client = session.client('cloudwatch', config=config)
-                # Fixed: list_metrics doesn't have MaxRecords parameter
-                response = cloudwatch_client.list_metrics()
-                metrics_count = len(response.get('Metrics', []))
-                st.success(f"✅ CloudWatch access confirmed - found {metrics_count} metrics")
-            except ClientError as cw_e:
-                error_code = cw_e.response['Error']['Code']
-                st.warning(f"⚠️ CloudWatch access limited: {error_code}")
-                if error_code == "AccessDenied":
-                    st.info("💡 Need cloudwatch:ListMetrics permission - but basic functionality will still work")
+            # Show detailed error in the UI
+            with st.container():
+                st.error(f"❌ **AWS ClientError: {error_code}**")
+                st.error(f"📝 **Message:** {error_message}")
+                
+                # Show specific error help
+                if error_code == "InvalidUserID.NotFound":
+                    st.error("🔑 **Issue:** Your AWS Access Key ID is invalid or the user was deleted")
+                    st.info("💡 **Fix:** Check your AWS Access Key ID in the AWS Console")
+                elif error_code == "SignatureDoesNotMatch":
+                    st.error("🔑 **Issue:** Your AWS Secret Access Key is incorrect")
+                    st.info("💡 **Fix:** Check your AWS Secret Access Key in the AWS Console")
+                elif error_code == "AccessDenied":
+                    st.error("🔒 **Issue:** Your user doesn't have sts:GetCallerIdentity permission")
+                    st.info("💡 **Fix:** Ask your AWS admin to add IAM permissions")
+                elif error_code == "TokenRefreshRequired":
+                    st.error("⏰ **Issue:** Your AWS credentials have expired")
+                    st.info("💡 **Fix:** Generate new AWS credentials")
                 else:
-                    st.info("💡 CloudWatch permissions limited - but basic functionality will still work")
-            except Exception as cw_e:
-                st.warning(f"⚠️ CloudWatch test failed: {str(cw_e)}")
+                    st.error(f"❓ **Unknown AWS Error:** {error_code}")
+                
+                # Show the full error details
+                with st.expander("🔍 Full Error Details"):
+                    st.json(e.response)
             
-            # Test EC2 access
-            st.write("🔄 Testing EC2 access...")
-            try:
-                ec2_client = session.client('ec2', config=config)
-                # Fixed: Use correct parameter name for EC2
-                response = ec2_client.describe_instances(MaxResults=5)
-                total_instances = sum(len(r['Instances']) for r in response['Reservations'])
-                st.success(f"✅ EC2 access confirmed - found {total_instances} instances")
-            except ClientError as ec2_e:
-                error_code = ec2_e.response['Error']['Code']
-                st.warning(f"⚠️ EC2 access limited: {error_code}")
-                if error_code == "UnauthorizedOperation":
-                    st.info("💡 Need ec2:DescribeInstances permission")
-            except Exception as ec2_e:
-                st.info(f"ℹ️ EC2 test skipped: {str(ec2_e)}")
+            self.connection_status['error'] = f"{error_code}: {error_message}"
+            return False
             
-            # Test RDS access
-            st.write("🔄 Testing RDS access...")
-            try:
-                rds_client = session.client('rds', config=config)
-                # Fixed: Use correct parameter name for RDS
-                response = rds_client.describe_db_instances(MaxRecords=5)
-                db_count = len(response.get('DBInstances', []))
-                st.success(f"✅ RDS access confirmed - found {db_count} DB instances")
-            except ClientError as rds_e:
-                error_code = rds_e.response['Error']['Code']
-                st.warning(f"⚠️ RDS access limited: {error_code}")
-                if error_code == "AccessDenied":
-                    st.info("💡 Need rds:DescribeDBInstances permission")
-            except Exception as rds_e:
-                st.info(f"ℹ️ RDS test skipped: {str(rds_e)}")
+        except Exception as e:
+            # Show unexpected errors
+            with st.container():
+                st.error(f"❌ **Unexpected Error:** {str(e)}")
+                st.error(f"📝 **Error Type:** {type(e).__name__}")
+                
+                # Show more details for debugging
+                with st.expander("🔍 Technical Details"):
+                    st.code(f"""
+    Error Type: {type(e).__name__}
+    Error Message: {str(e)}
+    Method: {method_name}
+    Region: {session.region_name if session else 'Unknown'}
+                    """)
             
-            return True
-            
-    except ClientError as e:
-        error_code = e.response['Error']['Code']
-        error_message = e.response['Error']['Message']
-        
-        # Show detailed error in the UI
-        with st.container():
-            st.error(f"❌ **AWS ClientError: {error_code}**")
-            st.error(f"📝 **Message:** {error_message}")
-            
-            # Show specific error help
-            if error_code == "InvalidUserID.NotFound":
-                st.error("🔑 **Issue:** Your AWS Access Key ID is invalid or the user was deleted")
-                st.info("💡 **Fix:** Check your AWS Access Key ID in the AWS Console")
-            elif error_code == "SignatureDoesNotMatch":
-                st.error("🔑 **Issue:** Your AWS Secret Access Key is incorrect")
-                st.info("💡 **Fix:** Check your AWS Secret Access Key in the AWS Console")
-            elif error_code == "AccessDenied":
-                st.error("🔒 **Issue:** Your user doesn't have sts:GetCallerIdentity permission")
-                st.info("💡 **Fix:** Ask your AWS admin to add IAM permissions")
-            elif error_code == "TokenRefreshRequired":
-                st.error("⏰ **Issue:** Your AWS credentials have expired")
-                st.info("💡 **Fix:** Generate new AWS credentials")
-            else:
-                st.error(f"❓ **Unknown AWS Error:** {error_code}")
-            
-            # Show the full error details
-            with st.expander("🔍 Full Error Details"):
-                st.json(e.response)
-        
-        self.connection_status['error'] = f"{error_code}: {error_message}"
-        return False
-        
-    except Exception as e:
-        # Show unexpected errors
-        with st.container():
-            st.error(f"❌ **Unexpected Error:** {str(e)}")
-            st.error(f"📝 **Error Type:** {type(e).__name__}")
-            
-            # Show more details for debugging
-            with st.expander("🔍 Technical Details"):
-                st.code(f"""
-        Error Type: {type(e).__name__}
-        Error Message: {str(e)}
-        Method: {method_name}
-        Region: {session.region_name if session else 'Unknown'}
-                        """)
-        
-        self.connection_status['error'] = f"Unexpected error: {str(e)}"
-        return False
+            self.connection_status['error'] = f"Unexpected error: {str(e)}"
+            return False
     
     def _initialize_clients(self):
         """Initialize AWS service clients with optimized configuration"""
