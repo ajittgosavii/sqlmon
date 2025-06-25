@@ -2154,7 +2154,107 @@ def display_connection_status():
     # Place this AFTER the display_connection_status() function
     # Around line 1900-2000 in your streamlit_app.py file
 
-    # =================== EC2 Debug Functions ===================
+    
+    def show_tagging_instructions():
+        """Show instructions for manually tagging instances"""
+        st.subheader("🏷️ How to Tag EC2 Instances for SQL Server")
+        
+        st.info("**The app looks for instances with this tag:**")
+        st.code("Key: Application\nValue: SQLServer")
+        
+        st.write("**Alternative accepted values:**")
+        st.write("• `SQL Server`")
+        st.write("• `Database`")
+        st.write("• `MSSQL`")
+        
+        st.subheader("📝 Manual Tagging Steps")
+        
+        with st.expander("🖱️ Tag via AWS Console"):
+            st.write("1. Go to **EC2 Console** → **Instances**")
+            st.write("2. **Select your SQL Server instance**")
+            st.write("3. Click **Actions** → **Instance Settings** → **Manage Tags**")
+            st.write("4. Click **Add Tag**")
+            st.write("5. Enter:")
+            st.code("Key: Application\nValue: SQLServer")
+            st.write("6. Click **Save**")
+        
+        with st.expander("💻 Tag via AWS CLI"):
+            st.code("""
+    # Replace i-1234567890abcdef0 with your instance ID
+    aws ec2 create-tags \\
+        --resources i-1234567890abcdef0 \\
+        --tags Key=Application,Value=SQLServer
+            """)
+
+    # =================== Data Collection Functions ===================
+    # (Continue with your existing collect_comprehensive_metrics function...)
+
+
+# =================== Data Collection Functions ===================
+    @st.cache_data(ttl=300)
+    def collect_comprehensive_metrics():
+        """Collect all metrics including OS, SQL Server, and logs with caching"""
+        if not st.session_state.cloudwatch_connector:
+            return {}, {}, []
+            
+        current_time = datetime.now()
+        start_time = current_time - timedelta(hours=24)
+        
+        all_metrics = {}
+        all_logs = {}
+        
+        try:
+            # Get AWS account information
+            account_info = st.session_state.cloudwatch_connector.get_account_info()
+            
+            # Display account info in sidebar
+            if account_info and not st.session_state.cloudwatch_connector.demo_mode:
+                st.sidebar.markdown("---")
+                st.sidebar.subheader("🏢 Account Information")
+                st.sidebar.write(f"**Account ID:** {account_info.get('account_id', 'Unknown')}")
+                st.sidebar.write(f"**Region:** {account_info.get('region', 'Unknown')}")
+                st.sidebar.write(f"**Environment:** {account_info.get('environment', 'Unknown')}")
+            
+            # Get EC2 instances for comprehensive monitoring
+            ec2_instances = st.session_state.cloudwatch_connector.get_ec2_sql_instances()
+            
+            for ec2 in ec2_instances:
+                instance_id = ec2['InstanceId']
+                
+                # Get SQL Server metrics
+                sql_metrics = st.session_state.cloudwatch_connector.get_comprehensive_sql_metrics(
+                    instance_id, start_time, current_time
+                )
+                
+                # Get OS-level metrics if enabled
+                aws_config = st.session_state.cloudwatch_connector.aws_config
+                if aws_config.get('enable_os_metrics', True):
+                    os_metrics = st.session_state.cloudwatch_connector.get_os_metrics(
+                        instance_id, start_time, current_time
+                    )
+                    
+                    # Merge OS metrics with SQL metrics
+                    for metric_key, metric_data in os_metrics.items():
+                        sql_metrics[f"os_{metric_key}"] = metric_data
+                
+                # Add to overall metrics with instance prefix
+                for metric_key, metric_data in sql_metrics.items():
+                    all_metrics[f"{instance_id}_{metric_key}"] = metric_data
+            
+            # Get logs from configured log groups
+            aws_config = st.session_state.cloudwatch_connector.aws_config
+            if aws_config.get('log_groups'):
+                all_logs = st.session_state.cloudwatch_connector.get_sql_server_logs(
+                    aws_config['log_groups'], 
+                    hours=24
+                )
+        
+        except Exception as e:
+            logger.error(f"Error collecting metrics: {str(e)}")
+            st.error(f"Error collecting metrics: {str(e)}")
+        
+        return all_metrics, all_logs, ec2_instances
+
     def debug_ec2_instances():
         """Debug function to find all EC2 instances and their tags"""
         
@@ -2341,74 +2441,11 @@ def display_connection_status():
         --tags Key=Application,Value=SQLServer
             """)
 
-    # =================== Data Collection Functions ===================
-    # (Continue with your existing collect_comprehensive_metrics function...)
 
 
-# =================== Data Collection Functions ===================
-@st.cache_data(ttl=300)
-def collect_comprehensive_metrics():
-    """Collect all metrics including OS, SQL Server, and logs with caching"""
-    if not st.session_state.cloudwatch_connector:
-        return {}, {}, []
-        
-    current_time = datetime.now()
-    start_time = current_time - timedelta(hours=24)
-    
-    all_metrics = {}
-    all_logs = {}
-    
-    try:
-        # Get AWS account information
-        account_info = st.session_state.cloudwatch_connector.get_account_info()
-        
-        # Display account info in sidebar
-        if account_info and not st.session_state.cloudwatch_connector.demo_mode:
-            st.sidebar.markdown("---")
-            st.sidebar.subheader("🏢 Account Information")
-            st.sidebar.write(f"**Account ID:** {account_info.get('account_id', 'Unknown')}")
-            st.sidebar.write(f"**Region:** {account_info.get('region', 'Unknown')}")
-            st.sidebar.write(f"**Environment:** {account_info.get('environment', 'Unknown')}")
-        
-        # Get EC2 instances for comprehensive monitoring
-        ec2_instances = st.session_state.cloudwatch_connector.get_ec2_sql_instances()
-        
-        for ec2 in ec2_instances:
-            instance_id = ec2['InstanceId']
-            
-            # Get SQL Server metrics
-            sql_metrics = st.session_state.cloudwatch_connector.get_comprehensive_sql_metrics(
-                instance_id, start_time, current_time
-            )
-            
-            # Get OS-level metrics if enabled
-            aws_config = st.session_state.cloudwatch_connector.aws_config
-            if aws_config.get('enable_os_metrics', True):
-                os_metrics = st.session_state.cloudwatch_connector.get_os_metrics(
-                    instance_id, start_time, current_time
-                )
-                
-                # Merge OS metrics with SQL metrics
-                for metric_key, metric_data in os_metrics.items():
-                    sql_metrics[f"os_{metric_key}"] = metric_data
-            
-            # Add to overall metrics with instance prefix
-            for metric_key, metric_data in sql_metrics.items():
-                all_metrics[f"{instance_id}_{metric_key}"] = metric_data
-        
-        # Get logs from configured log groups
-        aws_config = st.session_state.cloudwatch_connector.aws_config
-        if aws_config.get('log_groups'):
-            all_logs = st.session_state.cloudwatch_connector.get_sql_server_logs(
-                aws_config['log_groups'], 
-                hours=24
-            )
-    
-    except Exception as e:
-        logger.error(f"Error collecting metrics: {str(e)}")
-        st.error(f"Error collecting metrics: {str(e)}")
-    
-    return all_metrics, all_logs, ec2_instances
+
+
+
 
 # =================== Tab Rendering Functions ===================
 def render_dashboard_tab(all_metrics, ec2_instances, rds_instances):
