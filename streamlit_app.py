@@ -166,8 +166,8 @@ class AWSCloudWatchConnector:
             return True
         
         try:
-            # Test CloudWatch connection
-            self.cloudwatch.list_metrics(MaxRecords=1)
+            # Test CloudWatch connection - FIXED: removed invalid MaxRecords parameter
+            self.cloudwatch.list_metrics()
             return True
         except Exception as e:
             st.error(f"AWS connection test failed: {str(e)}")
