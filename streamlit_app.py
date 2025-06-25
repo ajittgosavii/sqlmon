@@ -42,17 +42,23 @@ except ImportError:
 
 warnings.filterwarnings('ignore')
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+    def safe_format_method(method_value):
+        """Safely format connection method string, handling None values"""
+        if method_value is None:
+            return 'Unknown'
+        return str(method_value).replace('_', ' ').title()
 
-# Configure Streamlit page
-st.set_page_config(
-    page_title="AWS CloudWatch SQL Server Monitor",
-    page_icon="☁️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+    # Configure logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+    # Configure Streamlit page
+    st.set_page_config(
+        page_title="AWS CloudWatch SQL Server Monitor",
+        page_icon="☁️",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
 
 # Enhanced CSS for AWS-themed enterprise UI
 st.markdown("""
@@ -183,7 +189,7 @@ class StreamlitAWSManager:
         """Reset connection state"""
         self.connection_status = {
             'connected': False,
-            'method': None,
+            'method': '',
             'error': None,
             'last_test': None,
             'account_id': None,
@@ -2036,7 +2042,7 @@ AWS_DEFAULT_REGION=us-east-1
             <div class="credential-status {status_class}">
                 <strong>{status_icon} Status:</strong> {status_text}<br>
                 <strong>Environment:</strong> {'Streamlit Cloud' if conn_status.get('streamlit_cloud') else 'Local'}<br>
-                <strong>Method:</strong> {conn_status.get('method', 'Unknown').replace('_', ' ').title()}<br>
+                <strong>Method:</strong> {safe_format_method(conn_status.get('method'))}<br>
                 <strong>Last Test:</strong> {conn_status.get('last_test').strftime('%H:%M:%S') if conn_status.get('last_test') else 'Never'}
             </div>
             """, unsafe_allow_html=True)
@@ -2258,7 +2264,7 @@ AWS_DEFAULT_REGION=us-east-1
                     col1, col2 = st.columns([3, 1])
                     with col1:
                         st.success(f"✅ **Live AWS Connection** - Account: {conn_status.get('account_id', 'Unknown')}")
-                        st.write(f"**Method:** {conn_status.get('method', 'Unknown').replace('_', ' ').title()}")
+                        st.write(f"**Method:** {safe_format_method(conn_status.get('method'))}")
                     with col2:
                         if st.button("🔄 Refresh Connection"):
                             st.session_state.cloudwatch_connector.test_connection()
