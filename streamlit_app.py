@@ -129,46 +129,24 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =================== AWS CloudWatch Integration ===================
-class ImprovedAWSCloudWatchConnector:
+class AWSCloudWatchConnector:
     def __init__(self, aws_config: Dict):
-        """Initialize AWS CloudWatch connections with improved error handling"""
+        """Initialize AWS CloudWatch connections"""
         self.aws_config = aws_config
-        self.demo_mode = True  # Start in demo mode
-        self.connection_status = "not_tested"
-        self.connection_error = None
+        self.demo_mode = not AWS_AVAILABLE
         
-        # Initialize clients as None
-        self.session = None
-        self.cloudwatch = None
-        self.logs = None
-        self.rds = None
-        self.ec2 = None
-        self.ssm = None
-        self.lambda_client = None
+        if not AWS_AVAILABLE:
+            st.warning("⚠️ Running in Demo Mode: boto3 not available. Install boto3 for real AWS CloudWatch connections.")
+            return
         
-        # Try to initialize AWS clients
-        self._initialize_aws_clients()
-    
-    def _initialize_aws_clients(self):
-        """Initialize AWS clients with comprehensive error handling"""
         try:
-            # Method 1: Try with provided credentials
-            if self.aws_config.get('access_key') and self.aws_config.get('secret_key'):
-                self.session = boto3.Session(
-                    aws_access_key_id=self.aws_config.get('access_key'),
-                    aws_secret_access_key=self.aws_config.get('secret_key'),
-                    region_name=self.aws_config.get('region', 'us-east-1')
-                )
-                st.info("🔑 Using provided AWS credentials")
+            # Initialize AWS clients
+            self.session = boto3.Session(
+                aws_access_key_id=aws_config.get('access_key'),
+                aws_secret_access_key=aws_config.get('secret_key'),
+                region_name=aws_config.get('region', 'us-east-1')
+            )
             
-            # Method 2: Try with environment variables or AWS CLI config
-            else:
-                self.session = boto3.Session(
-                    region_name=self.aws_config.get('region', 'us-east-1')
-                )
-                st.info("🔑 Using default AWS credential chain")
-            
-            # Initialize all AWS service clients
             self.cloudwatch = self.session.client('cloudwatch')
             self.logs = self.session.client('logs')
             self.rds = self.session.client('rds')
@@ -176,258 +154,24 @@ class ImprovedAWSCloudWatchConnector:
             self.ssm = self.session.client('ssm')
             self.lambda_client = self.session.client('lambda')
             
-            self.connection_status = "initialized"
-            
-        except NoCredentialsError:
-            self.connection_error = "No AWS credentials found"
-            st.error("❌ No AWS credentials found")
-            self._show_credential_help()
-            
-        except PartialCredentialsError:
-            self.connection_error = "Incomplete AWS credentials"
-            st.error("❌ Incomplete AWS credentials")
-            self._show_credential_help()
+            self.demo_mode = False
             
         except Exception as e:
-            self.connection_error = str(e)
-            st.error(f"❌ Failed to initialize AWS clients: {str(e)}")
+            st.error(f"Failed to initialize AWS clients: {str(e)}")
+            self.demo_mode = True
     
-    def test_connection(self) -> Tuple[bool, str]:
-        """Test AWS connection with detailed error reporting"""
-        if self.connection_status == "not_tested" or self.connection_error:
-            return False, self.connection_error or "Not initialized"
+    def test_connection(self) -> bool:
+        """Test AWS connection"""
+        if self.demo_mode:
+            return True
         
         try:
-            # Test 1: Basic credential validation
-            sts = self.session.client('sts')
-            identity = sts.get_caller_identity()
-            
-            # Test 2: CloudWatch access (the failing operation)
-            response = self.cloudwatch.list_metrics(MaxRecords=1)
-            
-            self.demo_mode = False
-            self.connection_status = "connected"
-            
-            return True, f"Connected as {identity.get('Arn', 'Unknown')}"
-            
-        except ClientError as e:
-            error_code = e.response['Error']['Code']
-            error_message = e.response['Error']['Message']
-            
-            # Handle specific AWS errors
-            if error_code == 'InvalidClientTokenId':
-                return False, "Invalid AWS Access Key ID"
-            elif error_code == 'SignatureDoesNotMatch':
-                return False, "Invalid AWS Secret Access Key"
-            elif error_code == 'TokenRefreshRequired':
-                return False, "AWS credentials have expired"
-            elif error_code == 'AccessDenied':
-                return False, f"Access denied: {error_message}"
-            elif error_code == 'UnauthorizedOperation':
-                return False, f"Insufficient permissions: {error_message}"
-            else:
-                return False, f"AWS Error: {error_code} - {error_message}"
-                
+            # Test CloudWatch connection - FIXED: removed invalid MaxRecords parameter
+            self.cloudwatch.list_metrics()
+            return True
         except Exception as e:
-            return False, f"Connection test failed: {str(e)}"
-    
-    def _show_credential_help(self):
-        """Show credential configuration help"""
-        st.markdown("""
-        ### 🔧 AWS Credentials Setup Guide
-        
-        #### Option 1: Environment Variables (Recommended)
-        ```bash
-        export AWS_ACCESS_KEY_ID=your_access_key
-        export AWS_SECRET_ACCESS_KEY=your_secret_key
-        export AWS_DEFAULT_REGION=us-east-1
-        ```
-        
-        #### Option 2: AWS CLI Configuration
-        ```bash
-        aws configure
-        ```
-        
-        #### Option 3: Provide in Sidebar
-        Enter your AWS credentials in the sidebar configuration.
-        
-        #### Required Permissions
-        Your AWS user/role needs these permissions:
-        - CloudWatch: ListMetrics, GetMetricStatistics, PutMetricData
-        - CloudWatch Logs: DescribeLogGroups, FilterLogEvents
-        - EC2: DescribeInstances
-        - RDS: DescribeDBInstances
-        - Systems Manager: DescribeInstanceInformation, SendCommand
-        """)
-    
-    def get_connection_status_display(self):
-        """Get formatted connection status for display"""
-        if self.demo_mode:
-            return "🎭 Demo Mode", "warning"
-        elif self.connection_status == "connected":
-            return "✅ Connected", "success"
-        elif self.connection_error:
-            return f"❌ {self.connection_error}", "error"
-        else:
-            return "🔄 Connecting...", "info"
-    
-    def diagnose_connection_issues(self):
-        """Comprehensive connection diagnosis"""
-        st.subheader("🔍 AWS Connection Diagnosis")
-        
-        # Check 1: Credential sources
-        st.write("**1. Checking credential sources:**")
-        
-        # Check environment variables
-        import os
-        if os.getenv('AWS_ACCESS_KEY_ID'):
-            st.success("✅ AWS_ACCESS_KEY_ID environment variable found")
-        else:
-            st.warning("⚠️ AWS_ACCESS_KEY_ID environment variable not found")
-        
-        if os.getenv('AWS_SECRET_ACCESS_KEY'):
-            st.success("✅ AWS_SECRET_ACCESS_KEY environment variable found")
-        else:
-            st.warning("⚠️ AWS_SECRET_ACCESS_KEY environment variable not found")
-        
-        # Check AWS credentials file
-        aws_creds_path = os.path.expanduser('~/.aws/credentials')
-        if os.path.exists(aws_creds_path):
-            st.success("✅ AWS credentials file found")
-        else:
-            st.warning("⚠️ AWS credentials file not found")
-        
-        # Check 2: Test basic AWS operations
-        st.write("**2. Testing AWS operations:**")
-        
-        if self.session:
-            try:
-                sts = self.session.client('sts')
-                identity = sts.get_caller_identity()
-                st.success(f"✅ Basic AWS connection successful")
-                st.info(f"Account: {identity['Account']}, User: {identity['Arn']}")
-            except Exception as e:
-                st.error(f"❌ Basic AWS connection failed: {str(e)}")
-        
-        # Check 3: Service-specific permissions
-        st.write("**3. Testing service permissions:**")
-        
-        services_to_test = [
-            ('CloudWatch', self.cloudwatch, 'list_metrics', {}),
-            ('CloudWatch Logs', self.logs, 'describe_log_groups', {'limit': 1}),
-            ('EC2', self.ec2, 'describe_instances', {'MaxResults': 1}),
-            ('RDS', self.rds, 'describe_db_instances', {'MaxRecords': 1})
-        ]
-        
-        for service_name, client, method_name, params in services_to_test:
-            if client:
-                try:
-                    method = getattr(client, method_name)
-                    method(**params)
-                    st.success(f"✅ {service_name} permissions OK")
-                except ClientError as e:
-                    st.error(f"❌ {service_name} permission error: {e.response['Error']['Code']}")
-                except Exception as e:
-                    st.error(f"❌ {service_name} error: {str(e)}")
-            else:
-                st.warning(f"⚠️ {service_name} client not initialized")
-    
-    def show_required_iam_policy(self):
-        """Display the required IAM policy"""
-        st.subheader("📋 Required IAM Policy")
-        
-        policy = {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Effect": "Allow",
-                    "Action": [
-                        "cloudwatch:GetMetricStatistics",
-                        "cloudwatch:ListMetrics",
-                        "cloudwatch:GetMetricData",
-                        "cloudwatch:PutMetricData",
-                        "logs:DescribeLogGroups",
-                        "logs:FilterLogEvents",
-                        "logs:GetLogEvents",
-                        "ec2:DescribeInstances",
-                        "ec2:DescribeInstanceStatus",
-                        "rds:DescribeDBInstances",
-                        "rds:DescribeDBClusters",
-                        "ssm:DescribeInstanceInformation",
-                        "ssm:SendCommand",
-                        "sts:GetCallerIdentity",
-                        "iam:ListAccountAliases"
-                    ],
-                    "Resource": "*"
-                }
-            ]
-        }
-        
-        st.code(json.dumps(policy, indent=2), language='json')
-        st.info("💡 Apply this policy to your IAM user or role for full functionality")
-
-    # Example usage in your Streamlit app
-    def enhanced_aws_setup():
-        """Enhanced AWS setup with better error handling"""
-        
-        # In your sidebar configuration section, replace the existing AWS setup with:
-        
-        st.sidebar.subheader("🔑 AWS Configuration")
-        
-        # AWS credentials input
-        use_manual_creds = st.sidebar.checkbox("Use manual credentials", value=False)
-        
-        aws_config = {
-            'region': st.sidebar.selectbox("AWS Region", [
-                'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
-                'eu-west-1', 'eu-central-1', 'ap-southeast-1', 'ap-northeast-1'
-            ])
-        }
-        
-        if use_manual_creds:
-            aws_config.update({
-                'access_key': st.sidebar.text_input("AWS Access Key ID", type="password"),
-                'secret_key': st.sidebar.text_input("AWS Secret Access Key", type="password")
-            })
-        
-        # Initialize connector
-        if 'aws_connector' not in st.session_state:
-            st.session_state.aws_connector = ImprovedAWSCloudWatchConnector(aws_config)
-        
-        # Display connection status
-        status_text, status_type = st.session_state.aws_connector.get_connection_status_display()
-        
-        if status_type == "success":
-            st.sidebar.success(status_text)
-        elif status_type == "warning":
-            st.sidebar.warning(status_text)
-        elif status_type == "error":
-            st.sidebar.error(status_text)
-        else:
-            st.sidebar.info(status_text)
-        
-        # Connection test button
-        if st.sidebar.button("🔌 Test AWS Connection"):
-            success, message = st.session_state.aws_connector.test_connection()
-            if success:
-                st.sidebar.success(f"✅ {message}")
-            else:
-                st.sidebar.error(f"❌ {message}")
-        
-        # Diagnosis button
-        if st.sidebar.button("🔍 Diagnose Connection Issues"):
-            st.session_state.show_diagnosis = True
-        
-        # Show diagnosis if requested
-        if getattr(st.session_state, 'show_diagnosis', False):
-            st.session_state.aws_connector.diagnose_connection_issues()
-            st.session_state.aws_connector.show_required_iam_policy()
-            
-            if st.button("Close Diagnosis"):
-                st.session_state.show_diagnosis = False
-                st.rerun()
-        
-        return st.session_state.aws_connector
+            st.error(f"AWS connection test failed: {str(e)}")
+            return False
     
     def get_cloudwatch_metrics(self, metric_queries: List[Dict], 
                               start_time: datetime, end_time: datetime) -> Dict[str, List]:
