@@ -21,6 +21,13 @@ import re
 import os
 import sys
 
+
+def safe_format_method(method_value):
+        """Safely format connection method string, handling None values"""
+        if method_value is None:
+            return 'Unknown'
+        return str(method_value).replace('_', ' ').title()
+
 # Try to import required AWS libraries
 try:
     import boto3
@@ -42,11 +49,7 @@ except ImportError:
 
 warnings.filterwarnings('ignore')
 
-    def safe_format_method(method_value):
-        """Safely format connection method string, handling None values"""
-        if method_value is None:
-            return 'Unknown'
-        return str(method_value).replace('_', ' ').title()
+    
 
     # Configure logging
     logging.basicConfig(level=logging.INFO)
