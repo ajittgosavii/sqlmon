@@ -23,7 +23,6 @@ import sys
 
     # =================== EMBEDDED CONFIGURATION ===================
     EMBEDDED_CONFIG = {
-        EMBEDDED_CONFIG = {
     "metadata": {
         "version": "1.0",
         "description": "AWS CloudWatch Log Groups Configuration for SQL Server Monitoring",
