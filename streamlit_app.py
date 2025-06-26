@@ -21,6 +21,398 @@ import re
 import os
 import sys
 
+    # =================== EMBEDDED CONFIGURATION ===================
+    EMBEDDED_CONFIG = {
+        EMBEDDED_CONFIG = {
+    "metadata": {
+        "version": "1.0",
+        "description": "AWS CloudWatch Log Groups Configuration for SQL Server Monitoring",
+        "last_updated": "2024-12-19",
+        "regions": ["us-east-1", "us-east-2", "us-west-1", "us-west-2", "eu-west-1"],
+        "default_region": "us-east-2"
+    },
+    "environments": {
+        "production": {
+            "ec2_metrics": {
+                "description": "EC2 Infrastructure and System Metrics",
+                "log_groups": [
+                    "/aws/ec2/cloudwatch-agent/us-east-2/system",
+                    "/aws/ec2/cloudwatch-agent/us-east-2/performance", 
+                    "/aws/ec2/instances/sql-server-prod-1/system",
+                    "/aws/ec2/instances/sql-server-prod-2/system",
+                    "/aws/ec2/instances/sql-always-on-primary/system",
+                    "/aws/ec2/instances/sql-always-on-secondary/system",
+                    "/ec2/sql-server/infrastructure",
+                    "/ec2/sql-server/networking",
+                    "/ec2/sql-server/storage",
+                    "/ec2/windows/system-events",
+                    "/ec2/windows/application-events",
+                    "/ec2/windows/security-events"
+                ],
+                "metrics_namespace": "AWS/EC2",
+                "custom_metrics_namespace": "CWAgent/EC2"
+            },
+            "sql_metrics": {
+                "description": "SQL Server Database Performance and Application Metrics",
+                "log_groups": [
+                    "/aws/rds/instance/sql-server-prod-1/error",
+                    "/aws/rds/instance/sql-server-prod-1/agent", 
+                    "/aws/rds/instance/sql-server-prod-2/error",
+                    "/aws/rds/instance/sql-server-prod-2/agent",
+                    "/ec2/sql-server/errorlog",
+                    "/ec2/sql-server/agent-log",
+                    "/ec2/sql-server/application",
+                    "/ec2/sql-server/database-engine",
+                    "/ec2/sql-server/always-on",
+                    "/ec2/sql-server/backup-restore",
+                    "/ec2/sql-server/replication",
+                    "/ec2/sql-server/security-audit",
+                    "/ec2/sql-server/performance-counters",
+                    "/ec2/sql-server/deadlocks",
+                    "/ec2/sql-server/blocking-sessions",
+                    "/ec2/sql-server/query-execution",
+                    "/ec2/sql-server/index-maintenance",
+                    "/ec2/sql-server/statistics-updates",
+                    "/sql-server/custom/business-metrics",
+                    "/sql-server/custom/application-specific"
+                ],
+                "metrics_namespace": "CWAgent/SQLServer",
+                "custom_metrics_namespace": "SQLServer/Performance"
+            },
+            "os_metrics": {
+                "description": "Operating System Level Metrics and Logs",
+                "log_groups": [
+                    "/aws/ec2/cloudwatch-agent/us-east-2/cpu",
+                    "/aws/ec2/cloudwatch-agent/us-east-2/memory",
+                    "/aws/ec2/cloudwatch-agent/us-east-2/disk",
+                    "/aws/ec2/cloudwatch-agent/us-east-2/network",
+                    "/ec2/windows/performance-monitor",
+                    "/ec2/windows/resource-monitor",
+                    "/ec2/windows/task-manager-logs",
+                    "/ec2/windows/event-viewer/system",
+                    "/ec2/windows/event-viewer/application",
+                    "/ec2/windows/event-viewer/security",
+                    "/ec2/windows/wmi-logs",
+                    "/ec2/windows/iis-logs",
+                    "/ec2/windows/scheduled-tasks",
+                    "/ec2/windows/services",
+                    "/ec2/windows/updates",
+                    "/os/custom/monitoring",
+                    "/os/custom/alerts"
+                ],
+                "metrics_namespace": "CWAgent",
+                "custom_metrics_namespace": "OS/Custom"
+            }
+        },
+        "staging": {
+            "ec2_metrics": {
+                "description": "EC2 Infrastructure and System Metrics - Staging",
+                "log_groups": [
+                    "/aws/ec2/cloudwatch-agent/us-east-2/staging/system",
+                    "/ec2/sql-server-staging/infrastructure",
+                    "/ec2/sql-server-staging/networking",
+                    "/ec2/windows/staging/system-events"
+                ],
+                "metrics_namespace": "AWS/EC2",
+                "custom_metrics_namespace": "CWAgent/EC2/Staging"
+            },
+            "sql_metrics": {
+                "description": "SQL Server Database Performance - Staging",
+                "log_groups": [
+                    "/aws/rds/instance/sql-server-staging-1/error",
+                    "/aws/rds/instance/sql-server-staging-1/agent",
+                    "/ec2/sql-server-staging/errorlog",
+                    "/ec2/sql-server-staging/application",
+                    "/ec2/sql-server-staging/performance-counters"
+                ],
+                "metrics_namespace": "CWAgent/SQLServer/Staging",
+                "custom_metrics_namespace": "SQLServer/Performance/Staging"
+            },
+            "os_metrics": {
+                "description": "Operating System Level Metrics - Staging",
+                "log_groups": [
+                    "/aws/ec2/cloudwatch-agent/us-east-2/staging/cpu",
+                    "/aws/ec2/cloudwatch-agent/us-east-2/staging/memory",
+                    "/ec2/windows/staging/performance-monitor"
+                ],
+                "metrics_namespace": "CWAgent/Staging",
+                "custom_metrics_namespace": "OS/Custom/Staging"
+            }
+        },
+        "development": {
+            "ec2_metrics": {
+                "description": "EC2 Infrastructure and System Metrics - Development",
+                "log_groups": [
+                    "/ec2/sql-server-dev/infrastructure",
+                    "/ec2/windows/dev/system-events"
+                ],
+                "metrics_namespace": "AWS/EC2",
+                "custom_metrics_namespace": "CWAgent/EC2/Dev"
+            },
+            "sql_metrics": {
+                "description": "SQL Server Database Performance - Development",
+                "log_groups": [
+                    "/ec2/sql-server-dev/errorlog",
+                    "/ec2/sql-server-dev/application"
+                ],
+                "metrics_namespace": "CWAgent/SQLServer/Dev",
+                "custom_metrics_namespace": "SQLServer/Performance/Dev"
+            },
+            "os_metrics": {
+                "description": "Operating System Level Metrics - Development",
+                "log_groups": [
+                    "/aws/ec2/cloudwatch-agent/us-east-2/dev/cpu",
+                    "/ec2/windows/dev/performance-monitor"
+                ],
+                "metrics_namespace": "CWAgent/Dev",
+                "custom_metrics_namespace": "OS/Custom/Dev"
+            }
+        }
+    },
+    "log_group_patterns": {
+        "ec2_instance_pattern": "/aws/ec2/instances/{instance_id}/{log_type}",
+        "rds_instance_pattern": "/aws/rds/instance/{instance_id}/{log_type}",
+        "custom_sql_pattern": "/ec2/sql-server/{instance_name}/{log_type}",
+        "windows_event_pattern": "/ec2/windows/{instance_name}/{event_type}"
+    },
+    "alert_configurations": {
+        "critical_log_patterns": [
+            "FATAL", "ERROR", "CRITICAL", "DEADLOCK", "OUT OF MEMORY",
+            "DISK FULL", "CONNECTION FAILED", "BACKUP FAILED", "AG FAILOVER"
+        ],
+        "warning_log_patterns": [
+            "WARNING", "WARN", "TIMEOUT", "SLOW QUERY", "HIGH CPU",
+            "HIGH MEMORY", "BLOCKING", "LONG RUNNING"
+        ],
+        "info_log_patterns": [
+            "INFO", "INFORMATION", "COMPLETED", "STARTED", "SUCCESS"
+        ]
+    },
+    "metric_filters": {
+        "sql_server": {
+            "error_filter": "{ $.level = \"ERROR\" || $.level = \"FATAL\" }",
+            "performance_filter": "{ $.metric_type = \"performance\" }",
+            "deadlock_filter": "{ $.message like \"*deadlock*\" }",
+            "blocking_filter": "{ $.message like \"*blocking*\" }"
+        },
+        "os": {
+            "high_cpu_filter": "{ $.cpu_usage > 80 }",
+            "high_memory_filter": "{ $.memory_usage > 90 }",
+            "disk_space_filter": "{ $.disk_usage > 85 }"
+        },
+        "ec2": {
+            "instance_state_filter": "{ $.state != \"running\" }",
+            "network_error_filter": "{ $.network_errors > 0 }"
+        }
+    },
+    "retention_policies": {
+        "production": {
+            "critical_logs": 90,
+            "error_logs": 60,
+            "warning_logs": 30,
+            "info_logs": 14,
+            "debug_logs": 7
+        },
+        "staging": {
+            "critical_logs": 60,
+            "error_logs": 30,
+            "warning_logs": 14,
+            "info_logs": 7,
+            "debug_logs": 3
+        },
+        "development": {
+            "critical_logs": 30,
+            "error_logs": 14,
+            "warning_logs": 7,
+            "info_logs": 3,
+            "debug_logs": 1
+        }
+    },
+    "monitoring_settings": {
+        "refresh_interval_seconds": 60,
+        "batch_size": 100,
+        "max_concurrent_requests": 10,
+        "timeout_seconds": 30,
+        "retry_attempts": 3,
+        "enable_real_time_monitoring": True,
+        "enable_predictive_analytics": True,
+        "enable_auto_remediation": True
+    },
+    "dashboard_layout": {
+        "default_tabs": [
+            "Dashboard", "SQL Metrics", "OS Metrics", "EC2 Metrics",
+            "Always On", "Auto-Remediation", "Predictive Analytics",
+            "Alerts", "Performance", "Reports"
+        ],
+        "metric_display_preferences": {
+            "charts_per_row": 2,
+            "default_time_range_hours": 24,
+            "auto_refresh_enabled": True,
+            "show_trend_lines": True,
+            "show_thresholds": True
+        }
+    },
+    "integration_settings": {
+        "claude_ai": {
+            "enabled": False,
+            "model": "claude-3-sonnet-20240229",
+            "max_tokens": 4096
+        },
+        "notifications": {
+            "email": {
+                "enabled": True,
+                "recipients": ["dba-team@company.com", "ops-team@company.com"]
+            },
+            "slack": {
+                "enabled": True,
+                "channel": "#sql-server-alerts"
+            }
+        }
+    }
+}
+    }
+
+            # =================== EMBEDDED CONFIGURATION MANAGER ===================
+class EmbeddedConfigurationManager:
+    """Manages embedded configuration for Streamlit Cloud compatibility"""
+    
+    def __init__(self):
+        self.config = EMBEDDED_CONFIG
+        logger.info("Embedded configuration loaded successfully")
+    
+    def get_log_groups_by_environment_and_category(self, environment: str, category: str) -> List[str]:
+        """Get log groups for specific environment and category"""
+        try:
+            return self.config["environments"][environment][category]["log_groups"]
+        except KeyError:
+            logger.warning(f"Configuration not found for {environment}/{category}")
+            return []
+    
+    def get_all_log_groups_for_environment(self, environment: str) -> List[str]:
+        """Get all log groups for an environment"""
+        all_log_groups = []
+        env_config = self.config.get("environments", {}).get(environment, {})
+        
+        for category in ["ec2_metrics", "sql_metrics", "os_metrics"]:
+            if category in env_config:
+                all_log_groups.extend(env_config[category].get("log_groups", []))
+        
+        return all_log_groups
+    
+    def get_metrics_namespace(self, environment: str, category: str) -> str:
+        """Get metrics namespace for environment and category"""
+        try:
+            return self.config["environments"][environment][category]["metrics_namespace"]
+        except KeyError:
+            return "CWAgent"  # Default namespace
+    
+    def get_available_environments(self) -> List[str]:
+        """Get list of available environments"""
+        return list(self.config.get("environments", {}).keys())
+    
+    def get_alert_patterns(self, severity: str) -> List[str]:
+        """Get alert patterns for specific severity"""
+        patterns_key = f"{severity.lower()}_log_patterns"
+        return self.config.get("alert_configurations", {}).get(patterns_key, [])
+    
+    def get_monitoring_settings(self) -> Dict:
+        """Get monitoring settings"""
+        return self.config.get("monitoring_settings", {})
+    
+    def get_retention_policy(self, environment: str, log_type: str) -> int:
+        """Get retention policy for environment and log type"""
+        try:
+            return self.config["retention_policies"][environment][log_type]
+        except KeyError:
+            return 30  # Default 30 days
+    
+    def get_log_group_patterns(self) -> Dict[str, str]:
+        """Get log group naming patterns"""
+        return self.config.get("log_group_patterns", {})
+    
+    def get_configuration_summary(self) -> Dict:
+        """Get summary of configuration for display"""
+        total_log_groups = 0
+        env_counts = {}
+        
+        for env_name, env_config in self.config.get("environments", {}).items():
+            env_total = 0
+            for category in ["ec2_metrics", "sql_metrics", "os_metrics"]:
+                if category in env_config:
+                    category_count = len(env_config[category].get("log_groups", []))
+                    env_total += category_count
+            env_counts[env_name] = env_total
+            total_log_groups += env_total
+        
+        return {
+            "total_log_groups": total_log_groups,
+            "environments": env_counts,
+            "version": self.config.get("metadata", {}).get("version", "Unknown"),
+            "default_region": self.config.get("metadata", {}).get("default_region", "us-east-1")
+        }
+
+# Initialize global embedded configuration manager
+@st.cache_resource
+def get_embedded_config_manager():
+    """Get cached embedded configuration manager instance"""
+    return EmbeddedConfigurationManager()
+
+# =================== UPDATED ALERT GENERATION ===================
+def generate_alerts_from_config(all_logs: Dict, config_manager: EmbeddedConfigurationManager) -> List[Dict]:
+    """Generate alerts based on embedded configuration patterns"""
+    alerts = []
+    
+    critical_patterns = config_manager.get_alert_patterns("critical")
+    warning_patterns = config_manager.get_alert_patterns("warning")
+    
+    for log_group, logs in all_logs.items():
+        for log_entry in logs[-10:]:  # Check last 10 log entries per group
+            message = log_entry.get('message', '').upper()
+            
+            # Check for critical patterns
+            for pattern in critical_patterns:
+                if pattern.upper() in message:
+                    alerts.append({
+                        'timestamp': datetime.fromtimestamp(log_entry['timestamp'] / 1000),
+                        'severity': 'critical',
+                        'source': log_group,
+                        'instance': log_group.split('/')[-2] if '/' in log_group else 'Unknown',
+                        'message': f'Critical pattern detected: {pattern}',
+                        'auto_remediation': 'Available',
+                        'original_message': log_entry.get('message', ''),
+                        'pattern_matched': pattern
+                    })
+                    break  # Only one alert per log entry
+            
+            # Check for warning patterns (if no critical pattern found)
+            else:
+                for pattern in warning_patterns:
+                    if pattern.upper() in message:
+                        alerts.append({
+                            'timestamp': datetime.fromtimestamp(log_entry['timestamp'] / 1000),
+                            'severity': 'warning',
+                            'source': log_group,
+                            'instance': log_group.split('/')[-2] if '/' in log_group else 'Unknown',
+                            'message': f'Warning pattern detected: {pattern}',
+                            'auto_remediation': 'Manual',
+                            'original_message': log_entry.get('message', ''),
+                            'pattern_matched': pattern
+                        })
+                        break  # Only one alert per log entry
+    
+    # Sort alerts by timestamp (newest first)
+    alerts.sort(key=lambda x: x['timestamp'], reverse=True)
+    return alerts[:20]  # Return only latest 20 alerts
+
+    @st.cache_resource
+    def get_embedded_config_manager():
+        """Get cached embedded configuration manager instance"""
+        return EmbeddedConfigurationManager()
+
+
+
+
+
 # Utility Functions
 def safe_format_method(method_value):
     """Safely format connection method string, handling None values"""
@@ -1798,245 +2190,308 @@ class ClaudeAIAnalyzer:
             self.enabled = False
 
 # =================== Configuration Functions ===================
-def setup_sidebar_configuration():
-    """Setup sidebar configuration and return AWS config"""
-    with st.sidebar:
-        st.header("🔧 AWS Configuration")
+    def setup_sidebar_configuration():
+        """Setup sidebar configuration using embedded configuration"""
+        config_manager = get_embedded_config_manager()
         
-        # System Status
-        st.subheader("📊 System Status")
-        
-        aws_manager = get_aws_manager()
-        if aws_manager.is_streamlit_cloud:
-            st.info("🌐 **Streamlit Cloud Detected**")
-            st.write("Optimized configuration active")
-        
-        if not AWS_AVAILABLE:
-            st.error("❌ boto3 not available")
-            st.info("💡 Install boto3: `pip install boto3`")
-        else:
-            st.success("✅ boto3 available")
-        
-        if not ANTHROPIC_AVAILABLE:
-            st.warning("⚠️ anthropic not available")
-            st.info("💡 Install anthropic: `pip install anthropic`")
-        else:
-            st.success("✅ anthropic available")
-        
-        if not AWS_AVAILABLE:
-            st.markdown("""
-            <div style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%); 
-                        padding: 1rem; border-radius: 8px; color: white; margin: 1rem 0;">
-                <strong>🎭 DEMO MODE</strong><br>
-                Using simulated data. Install boto3 for real AWS connections.
-            </div>
-            """, unsafe_allow_html=True)
-        
-        st.markdown("---")
-        
-        # AWS Credentials
-        st.subheader("🔑 AWS Credentials")
-        
-        auth_method = st.radio(
-            "Authentication Method",
-            [
-                "🌍 Environment Variables (Recommended for Streamlit Cloud)",
-                "🔑 Manual Input",
-                "🏢 Default Credential Chain"
-            ]
-        )
-        
-        aws_access_key = None
-        aws_secret_key = None
-        
-        if auth_method.startswith("🌍"):
-            st.info("💡 **Best for Streamlit Cloud deployment**")
-            st.write("Set these in your Streamlit Cloud app settings:")
-            st.code("""
-Environment Variables:
-AWS_ACCESS_KEY_ID=your_access_key_here
-AWS_SECRET_ACCESS_KEY=your_secret_key_here
-AWS_DEFAULT_REGION=us-east-1
-            """)
+        with st.sidebar:
+            st.header("🔧 AWS Configuration")
             
-            env_access_key = os.getenv('AWS_ACCESS_KEY_ID')
-            env_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+            # Configuration Status
+            st.subheader("📄 Configuration Status")
+            config_summary = config_manager.get_configuration_summary()
             
-            if env_access_key and env_secret_key:
-                st.success("✅ Environment variables detected!")
-                st.write(f"**Access Key:** {env_access_key[:8]}...")
-                aws_access_key = env_access_key
-                aws_secret_key = env_secret_key
-            else:
-                st.warning("⚠️ Environment variables not found")
-                
-        elif auth_method.startswith("🔑"):
-            st.info("💡 **For local development and testing**")
-            aws_access_key = st.text_input(
-                "AWS Access Key ID", 
-                type="password",
-                help="Your AWS Access Key ID (starts with AKIA or ASIA)",
-                placeholder="AKIAIOSFODNN7EXAMPLE"
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Config Version", config_summary["version"])
+            with col2:
+                st.metric("Total Log Groups", config_summary["total_log_groups"])
+            
+            st.success("✅ Embedded configuration loaded")
+            
+            # Environment Selection
+            st.subheader("🏢 Environment Configuration")
+            available_environments = config_manager.get_available_environments()
+            
+            # Show environment summary
+            with st.expander("📊 Environment Summary"):
+                for env, count in config_summary["environments"].items():
+                    st.write(f"**{env.title()}:** {count} log groups")
+            
+            selected_environment = st.selectbox(
+                "Select Environment",
+                available_environments,
+                index=0 if "production" in available_environments else 0,
+                help="Choose the environment to monitor"
             )
             
-            aws_secret_key = st.text_input(
-                "AWS Secret Access Key", 
-                type="password",
-                help="Your AWS Secret Access Key (40 characters)",
-                placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-            )
+            # AWS Credentials
+            st.subheader("🔑 AWS Credentials")
             
-        else:
-            st.info("💡 **For EC2 instances with IAM roles**")
-            st.write("Will attempt to use:")
-            st.write("• EC2 instance profile")
-            st.write("• ECS task role")
-            st.write("• Shared credentials file")
-        
-        # Region selection
-        aws_region = st.selectbox("AWS Region", [
-            'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
-            'eu-west-1', 'eu-west-2', 'eu-central-1', 
-            'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1'
-        ])
-        
-        # AWS Account Information
-        st.subheader("🏢 AWS Account Details")
-        aws_account_id = st.text_input("AWS Account ID (Optional)", 
-                                      help="Your 12-digit AWS Account ID")
-        aws_account_name = st.text_input("Account Name/Environment", 
-                                        value="Production", 
-                                        help="Environment name (e.g., Production, Staging)")
-
-        # CloudWatch Configuration
-        st.subheader("📊 CloudWatch Configuration")
-
-        st.write("**📝 CloudWatch Log Groups:**")
-        default_log_groups = [
-            "/aws/rds/instance/sql-server-prod-1/error",
-            "/aws/rds/instance/sql-server-prod-1/agent", 
-            "/ec2/sql-server/application",
-            "/ec2/sql-server/system",
-            "/ec2/sql-server/security"
-        ]
-
-        log_groups = st.text_area(
-            "Log Groups (one per line)",
-            value="\n".join(default_log_groups),
-            height=150,
-            help="Enter CloudWatch log group names, one per line"
-        ).split('\n')
-
-        custom_namespace = st.text_input(
-            "Custom Metrics Namespace", 
-            value="SQLServer/CustomMetrics",
-            help="Namespace for your custom SQL Server metrics"
-        )
-
-        st.write("**🖥️ OS Metrics Configuration:**")
-        enable_os_metrics = st.checkbox("Enable OS-level Metrics", value=True)
-        os_metrics_namespace = st.text_input(
-            "OS Metrics Namespace",
-            value="CWAgent",
-            help="CloudWatch namespace for OS metrics"
-        )
-
-        # Setup Guide
-        with st.expander("📋 Setup Guide for Real Data", expanded=False):
-            st.markdown("""
-            ### 🔧 Setting Up SQL Server Metrics in AWS CloudWatch
-            
-            **For Streamlit Cloud deployment, set these environment variables:**
-            
-            ```bash
-            AWS_ACCESS_KEY_ID=your_access_key
-            AWS_SECRET_ACCESS_KEY=your_secret_key
-            AWS_DEFAULT_REGION=us-east-1
-            ```
-            
-            **Required IAM Permissions:**
-            ```json
-            {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Effect": "Allow",
-                        "Action": [
-                            "cloudwatch:GetMetricStatistics",
-                            "cloudwatch:ListMetrics",
-                            "cloudwatch:PutMetricData",
-                            "logs:FilterLogEvents",
-                            "logs:DescribeLogGroups",
-                            "ec2:DescribeInstances",
-                            "rds:DescribeDBInstances",
-                            "sts:GetCallerIdentity"
-                        ],
-                        "Resource": "*"
-                    }
+            auth_method = st.radio(
+                "Authentication Method",
+                [
+                    "🌍 Environment Variables (Recommended for Streamlit Cloud)",
+                    "🔑 Manual Input",
+                    "🏢 Default Credential Chain"
                 ]
-            }
-            ```
+            )
             
-            **CloudWatch Agent Setup on SQL Server instances:**
-            1. Install CloudWatch agent
-            2. Configure SQL Server performance counters
-            3. Set up custom metrics collection
-            4. Tag EC2 instances with `Application: SQLServer`
-            """)
-        
-        st.markdown("---")
-        
-        # Claude AI Configuration
-        st.subheader("🤖 Claude AI Settings")
-        claude_api_key = st.text_input("Claude AI API Key", type="password", 
-                                      help="Enter your Anthropic Claude API key")
-        
-        if claude_api_key and ANTHROPIC_AVAILABLE:
-            if 'claude_analyzer' not in st.session_state or st.session_state.claude_analyzer is None:
-                st.session_state.claude_analyzer = ClaudeAIAnalyzer(claude_api_key)
+            aws_access_key = None
+            aws_secret_key = None
             
-            if hasattr(st.session_state.claude_analyzer, 'enabled') and st.session_state.claude_analyzer.enabled:
-                st.success("✅ Claude AI Connected")
+            if auth_method.startswith("🌍"):
+                st.info("💡 **Best for Streamlit Cloud deployment**")
+                st.code("""
+    Environment Variables in Streamlit Cloud:
+    AWS_ACCESS_KEY_ID=your_access_key_here
+    AWS_SECRET_ACCESS_KEY=your_secret_key_here
+    AWS_DEFAULT_REGION=us-east-2
+                """)
+                
+                env_access_key = os.getenv('AWS_ACCESS_KEY_ID')
+                env_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+                
+                if env_access_key and env_secret_key:
+                    st.success("✅ Environment variables detected!")
+                    st.write(f"**Access Key:** {env_access_key[:8]}...")
+                    aws_access_key = env_access_key
+                    aws_secret_key = env_secret_key
+                else:
+                    st.warning("⚠️ Environment variables not found")
+                    st.info("📖 **Set in Streamlit Cloud:**\n1. Go to your app settings\n2. Add environment variables\n3. Restart your app")
+                    
+            elif auth_method.startswith("🔑"):
+                st.info("💡 **For local development and testing**")
+                aws_access_key = st.text_input(
+                    "AWS Access Key ID", 
+                    type="password",
+                    help="Your AWS Access Key ID (starts with AKIA or ASIA)",
+                    placeholder="AKIAIOSFODNN7EXAMPLE"
+                )
+                
+                aws_secret_key = st.text_input(
+                    "AWS Secret Access Key", 
+                    type="password",
+                    help="Your AWS Secret Access Key (40 characters)",
+                    placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+                )
+                
             else:
-                st.error("❌ Claude AI Connection Failed")
-        
-        st.markdown("---")
-        
-        # Auto-Remediation Settings
-        st.subheader("🔧 Auto-Remediation")
-        enable_auto_remediation = st.checkbox("Enable Auto-Remediation", value=True)
-        auto_approval_threshold = st.selectbox("Auto-Approval Level", [
-            "Low Risk Only",
-            "Low + Medium Risk", 
-            "All Except Critical",
-            "Manual Approval Required"
-        ])
-        
-        st.markdown("---")
-        
-        # Monitoring Settings
-        st.subheader("📊 Monitoring Settings")
-        refresh_interval = st.slider("Refresh Interval (seconds)", 30, 300, 60)
-        metric_retention_days = st.slider("Metric Retention (days)", 7, 90, 30)
-        enable_predictive_alerts = st.checkbox("Enable Predictive Alerts", value=True)
-        
-        return {
-            'access_key': aws_access_key or 'demo',
-            'secret_key': aws_secret_key or 'demo',
-            'region': aws_region,
-            'account_id': aws_account_id,
-            'account_name': aws_account_name,
-            'log_groups': [lg.strip() for lg in log_groups if lg.strip()],
-            'custom_namespace': custom_namespace,
-            'os_metrics_namespace': os_metrics_namespace,
-            'enable_os_metrics': enable_os_metrics,
-            'claude_api_key': claude_api_key,
-            'enable_auto_remediation': enable_auto_remediation,
-            'auto_approval_threshold': auto_approval_threshold,
-            'refresh_interval': refresh_interval,
-            'enable_predictive_alerts': enable_predictive_alerts
-        }
+                st.info("💡 **For EC2 instances with IAM roles**")
+                st.write("Will attempt to use:")
+                st.write("• EC2 instance profile")
+                st.write("• ECS task role")
+                st.write("• Shared credentials file")
+            
+            # Region selection with config default
+            default_region = config_summary["default_region"]
+            available_regions = config_manager.config.get("metadata", {}).get("regions", [
+                'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
+                'eu-west-1', 'eu-west-2', 'eu-central-1', 
+                'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1'
+            ])
+            
+            try:
+                default_index = available_regions.index(default_region)
+            except ValueError:
+                default_index = 1 if 'us-east-2' in available_regions else 0
+                
+            aws_region = st.selectbox("AWS Region", available_regions, index=default_index)
+            
+            # AWS Account Information
+            st.subheader("🏢 AWS Account Details")
+            aws_account_id = st.text_input("AWS Account ID (Optional)", 
+                                        help="Your 12-digit AWS Account ID")
+            aws_account_name = st.text_input("Account Name/Environment", 
+                                            value=selected_environment.title(), 
+                                            help="Environment name (e.g., Production, Staging)")
 
+            # Dynamic CloudWatch Configuration
+            st.subheader("📊 CloudWatch Configuration")
+            
+            # Log Groups Configuration by Category
+            st.write("**📝 CloudWatch Log Groups Configuration:**")
+            
+            # Show available categories for selected environment
+            env_config = config_manager.config.get("environments", {}).get(selected_environment, {})
+            
+            log_group_selection = st.radio(
+                "Log Group Selection Method",
+                ["📋 Use All Configured Groups", "🔧 Select by Category", "✏️ Custom Configuration"]
+            )
+            
+            selected_log_groups = []
+            
+            if log_group_selection == "📋 Use All Configured Groups":
+                # Use all configured log groups for the environment
+                selected_log_groups = config_manager.get_all_log_groups_for_environment(selected_environment)
+                
+                st.success(f"✅ Using {len(selected_log_groups)} pre-configured log groups for {selected_environment}")
+                
+                # Show summary by category
+                with st.expander(f"📊 Log Groups for {selected_environment.title()}"):
+                    for category in ["ec2_metrics", "sql_metrics", "os_metrics"]:
+                        category_groups = config_manager.get_log_groups_by_environment_and_category(selected_environment, category)
+                        if category_groups:
+                            category_name = category.replace('_', ' ').title()
+                            st.write(f"**{category_name}:** {len(category_groups)} groups")
+                            for i, group in enumerate(category_groups[:3]):  # Show first 3
+                                st.write(f"  {i+1}. {group}")
+                            if len(category_groups) > 3:
+                                st.write(f"  ... and {len(category_groups) - 3} more groups")
+            
+            elif log_group_selection == "🔧 Select by Category":
+                # Allow user to select specific categories
+                st.write("**Select monitoring categories:**")
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    enable_ec2_metrics = st.checkbox("🖥️ EC2 Metrics", value=True)
+                    if enable_ec2_metrics:
+                        ec2_groups = config_manager.get_log_groups_by_environment_and_category(selected_environment, "ec2_metrics")
+                        st.caption(f"{len(ec2_groups)} log groups")
+                
+                with col2:
+                    enable_sql_metrics = st.checkbox("🗄️ SQL Server Metrics", value=True)
+                    if enable_sql_metrics:
+                        sql_groups = config_manager.get_log_groups_by_environment_and_category(selected_environment, "sql_metrics")
+                        st.caption(f"{len(sql_groups)} log groups")
+                
+                with col3:
+                    enable_os_metrics = st.checkbox("💻 OS Metrics", value=True)
+                    if enable_os_metrics:
+                        os_groups = config_manager.get_log_groups_by_environment_and_category(selected_environment, "os_metrics")
+                        st.caption(f"{len(os_groups)} log groups")
+                
+                # Build selected log groups based on checkboxes
+                if enable_ec2_metrics:
+                    selected_log_groups.extend(
+                        config_manager.get_log_groups_by_environment_and_category(selected_environment, "ec2_metrics")
+                    )
+                
+                if enable_sql_metrics:
+                    selected_log_groups.extend(
+                        config_manager.get_log_groups_by_environment_and_category(selected_environment, "sql_metrics")
+                    )
+                
+                if enable_os_metrics:
+                    selected_log_groups.extend(
+                        config_manager.get_log_groups_by_environment_and_category(selected_environment, "os_metrics")
+                    )
+                
+                st.info(f"📊 Selected {len(selected_log_groups)} log groups across chosen categories")
+            
+            else:  # Custom Configuration
+                # Allow manual input
+                all_configured_groups = config_manager.get_all_log_groups_for_environment(selected_environment)
+                
+                st.info("✏️ **Custom log group configuration**")
+                custom_log_groups = st.text_area(
+                    "Log Groups (one per line)",
+                    value="\n".join(all_configured_groups[:10]),  # Show first 10 as default
+                    height=200,
+                    help="Enter CloudWatch log group names, one per line"
+                )
+                selected_log_groups = [lg.strip() for lg in custom_log_groups.split('\n') if lg.strip()]
+            
+            # Metrics Namespace Configuration
+            default_namespace = config_manager.get_metrics_namespace(selected_environment, "sql_metrics")
+            custom_namespace = st.text_input(
+                "Custom Metrics Namespace", 
+                value=default_namespace,
+                help="Namespace for your custom SQL Server metrics"
+            )
+
+            # OS Metrics Configuration
+            st.write("**🖥️ OS Metrics Configuration:**")
+            enable_os_metrics_flag = st.checkbox("Enable OS-level Metrics", value=True)
+            os_metrics_namespace = st.text_input(
+                "OS Metrics Namespace",
+                value=config_manager.get_metrics_namespace(selected_environment, "os_metrics"),
+                help="CloudWatch namespace for OS metrics"
+            )
+            
+            # Monitoring Settings from Configuration
+            monitoring_settings = config_manager.get_monitoring_settings()
+            
+            st.markdown("---")
+            
+            # Claude AI Configuration
+            st.subheader("🤖 Claude AI Settings")
+            claude_config = config_manager.config.get("integration_settings", {}).get("claude_ai", {})
+            
+            claude_api_key = st.text_input("Claude AI API Key", type="password", 
+                                        help="Enter your Anthropic Claude API key")
+            
+            if claude_api_key and ANTHROPIC_AVAILABLE:
+                if 'claude_analyzer' not in st.session_state or st.session_state.claude_analyzer is None:
+                    st.session_state.claude_analyzer = ClaudeAIAnalyzer(claude_api_key)
+                
+                if hasattr(st.session_state.claude_analyzer, 'enabled') and st.session_state.claude_analyzer.enabled:
+                    st.success("✅ Claude AI Connected")
+                else:
+                    st.error("❌ Claude AI Connection Failed")
+            
+            st.markdown("---")
+            
+            # Auto-Remediation Settings
+            st.subheader("🔧 Auto-Remediation")
+            enable_auto_remediation = st.checkbox(
+                "Enable Auto-Remediation", 
+                value=monitoring_settings.get("enable_auto_remediation", True)
+            )
+            auto_approval_threshold = st.selectbox("Auto-Approval Level", [
+                "Low Risk Only",
+                "Low + Medium Risk", 
+                "All Except Critical",
+                "Manual Approval Required"
+            ])
+            
+            st.markdown("---")
+            
+            # Monitoring Settings
+            st.subheader("📊 Monitoring Settings")
+            refresh_interval = st.slider(
+                "Refresh Interval (seconds)", 
+                30, 300, 
+                monitoring_settings.get("refresh_interval_seconds", 60)
+            )
+            metric_retention_days = st.slider("Metric Retention (days)", 7, 90, 30)
+            enable_predictive_alerts = st.checkbox(
+                "Enable Predictive Alerts", 
+                value=monitoring_settings.get("enable_predictive_analytics", True)
+            )
+            
+            # Configuration Summary
+            with st.expander("📋 Configuration Summary"):
+                st.write(f"**Environment:** {selected_environment}")
+                st.write(f"**Region:** {aws_region}")
+                st.write(f"**Log Groups:** {len(selected_log_groups)}")
+                st.write(f"**Metrics Namespace:** {custom_namespace}")
+                st.write(f"**Auto-Remediation:** {'Enabled' if enable_auto_remediation else 'Disabled'}")
+                st.write(f"**Refresh Interval:** {refresh_interval}s")
+                st.write(f"**Config Version:** {config_summary['version']}")
+            
+            return {
+                'access_key': aws_access_key or 'demo',
+                'secret_key': aws_secret_key or 'demo',
+                'region': aws_region,
+                'account_id': aws_account_id,
+                'account_name': aws_account_name,
+                'environment': selected_environment,
+                'log_groups': selected_log_groups,
+                'custom_namespace': custom_namespace,
+                'os_metrics_namespace': os_metrics_namespace,
+                'enable_os_metrics': enable_os_metrics_flag,
+                'claude_api_key': claude_api_key,
+                'enable_auto_remediation': enable_auto_remediation,
+                'auto_approval_threshold': auto_approval_threshold,
+                'refresh_interval': refresh_interval,
+                'enable_predictive_alerts': enable_predictive_alerts,
+                'config_manager': config_manager
+            }
 def initialize_session_state(aws_config):
     """Initialize session state variables"""
     if 'cloudwatch_connector' not in st.session_state:
@@ -3062,156 +3517,190 @@ def render_predictive_analytics_tab(all_metrics, enable_predictive_alerts):
         st.warning("🔒 Predictive analytics is currently disabled")
         st.info("Enable predictive alerts in the sidebar to see trend analysis and capacity planning insights.")
 
-def render_alerts_tab(all_metrics, all_logs):
-    """Render alerts tab"""
-    st.header("🚨 Intelligent Alert Management")
-    
-    # Generate current alerts based on metrics
-    current_alerts = []
-    
-    # Check for critical conditions
-    if all_metrics.get('cpu_usage'):
-        latest_cpu = all_metrics['cpu_usage'][-1]['Average']
-        if latest_cpu > 90:
-            current_alerts.append({
-                'timestamp': datetime.now(),
-                'severity': 'critical',
-                'source': 'CloudWatch',
-                'instance': 'System Average',
-                'message': f'Critical CPU utilization detected ({latest_cpu:.1f}%)',
-                'auto_remediation': 'Available'
-            })
-        elif latest_cpu > 80:
-            current_alerts.append({
-                'timestamp': datetime.now(),
-                'severity': 'warning',
-                'source': 'CloudWatch',
-                'instance': 'System Average',
-                'message': f'High CPU utilization detected ({latest_cpu:.1f}%)',
-                'auto_remediation': 'Available'
-            })
-    
-    # Add demo alerts for demonstration
-    if st.session_state.cloudwatch_connector.demo_mode:
-        demo_alerts = [
-            {
-                'timestamp': datetime.now() - timedelta(minutes=5),
-                'severity': 'warning',
-                'source': 'Always On Monitor',
-                'instance': 'AG-Production',
-                'message': 'Synchronization lag detected (3.2 seconds)',
-                'auto_remediation': 'Manual'
-            },
-            {
-                'timestamp': datetime.now() - timedelta(hours=1),
-                'severity': 'info',
-                'source': 'Predictive Analytics',
-                'instance': 'sql-server-prod-2',
-                'message': 'Memory usage trend increasing - action recommended within 24h',
-                'auto_remediation': 'Scheduled'
-            }
-        ]
-        current_alerts.extend(demo_alerts)
-    
-    # Alert summary
-    col1, col2, col3, col4 = st.columns(4)
-    
-    critical_alerts = [a for a in current_alerts if a['severity'] == 'critical']
-    warning_alerts = [a for a in current_alerts if a['severity'] == 'warning']
-    info_alerts = [a for a in current_alerts if a['severity'] == 'info']
-    
-    with col1:
-        st.metric("🔴 Critical", len(critical_alerts))
-    
-    with col2:
-        st.metric("🟡 Warning", len(warning_alerts))
-    
-    with col3:
-        st.metric("🔵 Info", len(info_alerts))
-    
-    with col4:
-        auto_remediated = [a for a in current_alerts if a['auto_remediation'] == 'Available']
-        st.metric("🤖 Auto-Remediation", len(auto_remediated))
-    
-    st.markdown("---")
-    
-    # Alert list
-    if current_alerts:
-        st.subheader("📋 Active Alerts")
+    # =================== UPDATED render_alerts_tab FUNCTION ===================
+    def render_alerts_tab(all_metrics, all_logs):
+        """Render alerts tab with configuration-based alerts"""
+        st.header("🚨 Intelligent Alert Management")
         
-        for alert in current_alerts:
-            severity_styles = {
-                'critical': 'alert-critical',
-                'warning': 'alert-warning',
-                'info': 'claude-insight'
-            }
+        # NEW: Add configuration-based alerts FIRST
+        config_manager = get_embedded_config_manager()
+        if all_logs:
+            config_alerts = generate_alerts_from_config(all_logs, config_manager)
             
-            style_class = severity_styles.get(alert['severity'], 'metric-card')
-            timestamp_str = alert['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
+            if config_alerts:
+                st.subheader("⚙️ Configuration-Based Alerts")
+                st.info(f"🔍 Found {len(config_alerts)} alerts based on configured patterns")
+                
+                for alert in config_alerts[:5]:  # Show first 5 alerts
+                    severity_style = "alert-critical" if alert['severity'] == 'critical' else "alert-warning"
+                    st.markdown(f"""
+                    <div class="{severity_style}">
+                        <strong>🚨 {alert['severity'].upper()}</strong> - {alert['instance']}<br>
+                        <strong>📍 Source:</strong> {alert['source']}<br>
+                        <strong>🎯 Pattern:</strong> {alert['pattern_matched']}<br>
+                        <strong>💬 Message:</strong> {alert['message']}<br>
+                        <strong>⏰ Time:</strong> {alert['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}<br>
+                        <strong>🤖 Auto-Remediation:</strong> {alert['auto_remediation']}
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Show original log message
+                    with st.expander(f"📝 View Original Log Message"):
+                        st.code(alert['original_message'])
+                    
+                    st.markdown("---")
+                
+                if len(config_alerts) > 5:
+                    st.info(f"💡 Showing 5 of {len(config_alerts)} total alerts. Check individual log groups for more details.")
+        
+        # EXISTING CODE CONTINUES BELOW (keep everything as-is)
+        
+        # Generate current alerts based on metrics
+        current_alerts = []
+        
+        # Check for critical conditions
+        if all_metrics.get('cpu_usage'):
+            latest_cpu = all_metrics['cpu_usage'][-1]['Average']
+            if latest_cpu > 90:
+                current_alerts.append({
+                    'timestamp': datetime.now(),
+                    'severity': 'critical',
+                    'source': 'CloudWatch',
+                    'instance': 'System Average',
+                    'message': f'Critical CPU utilization detected ({latest_cpu:.1f}%)',
+                    'auto_remediation': 'Available'
+                })
+            elif latest_cpu > 80:
+                current_alerts.append({
+                    'timestamp': datetime.now(),
+                    'severity': 'warning',
+                    'source': 'CloudWatch',
+                    'instance': 'System Average',
+                    'message': f'High CPU utilization detected ({latest_cpu:.1f}%)',
+                    'auto_remediation': 'Available'
+                })
+        
+        # Add demo alerts for demonstration
+        if st.session_state.cloudwatch_connector.demo_mode:
+            demo_alerts = [
+                {
+                    'timestamp': datetime.now() - timedelta(minutes=5),
+                    'severity': 'warning',
+                    'source': 'Always On Monitor',
+                    'instance': 'AG-Production',
+                    'message': 'Synchronization lag detected (3.2 seconds)',
+                    'auto_remediation': 'Manual'
+                },
+                {
+                    'timestamp': datetime.now() - timedelta(hours=1),
+                    'severity': 'info',
+                    'source': 'Predictive Analytics',
+                    'instance': 'sql-server-prod-2',
+                    'message': 'Memory usage trend increasing - action recommended within 24h',
+                    'auto_remediation': 'Scheduled'
+                }
+            ]
+            current_alerts.extend(demo_alerts)
+        
+        # Alert summary
+        col1, col2, col3, col4 = st.columns(4)
+        
+        critical_alerts = [a for a in current_alerts if a['severity'] == 'critical']
+        warning_alerts = [a for a in current_alerts if a['severity'] == 'warning']
+        info_alerts = [a for a in current_alerts if a['severity'] == 'info']
+        
+        with col1:
+            st.metric("🔴 Critical", len(critical_alerts))
+        
+        with col2:
+            st.metric("🟡 Warning", len(warning_alerts))
+        
+        with col3:
+            st.metric("🔵 Info", len(info_alerts))
+        
+        with col4:
+            auto_remediated = [a for a in current_alerts if a['auto_remediation'] == 'Available']
+            st.metric("🤖 Auto-Remediation", len(auto_remediated))
+        
+        st.markdown("---")
+        
+        # Alert list
+        if current_alerts:
+            st.subheader("📋 Active Alerts")
             
-            st.markdown(f"""
-            <div class="{style_class}">
-                <strong>{alert['severity'].upper()}</strong> - {alert['instance']}<br>
-                <strong>Source:</strong> {alert['source']}<br>
-                <strong>Message:</strong> {alert['message']}<br>
-                <strong>Time:</strong> {timestamp_str}<br>
-                <strong>Auto-Remediation:</strong> {alert['auto_remediation']}
-            </div>
-            """, unsafe_allow_html=True)
+            for alert in current_alerts:
+                severity_styles = {
+                    'critical': 'alert-critical',
+                    'warning': 'alert-warning',
+                    'info': 'claude-insight'
+                }
+                
+                style_class = severity_styles.get(alert['severity'], 'metric-card')
+                timestamp_str = alert['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
+                
+                st.markdown(f"""
+                <div class="{style_class}">
+                    <strong>{alert['severity'].upper()}</strong> - {alert['instance']}<br>
+                    <strong>Source:</strong> {alert['source']}<br>
+                    <strong>Message:</strong> {alert['message']}<br>
+                    <strong>Time:</strong> {timestamp_str}<br>
+                    <strong>Auto-Remediation:</strong> {alert['auto_remediation']}
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if alert['severity'] == 'critical':
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        if st.button(f"🔧 Remediate", key=f"remediate_{alert['instance']}_{alert['timestamp']}"):
+                            st.success("Remediation action initiated")
+                    with col2:
+                        if st.button(f"📞 Escalate", key=f"escalate_{alert['instance']}_{alert['timestamp']}"):
+                            st.info("Alert escalated to on-call engineer")
+                    with col3:
+                        if st.button(f"✅ Acknowledge", key=f"ack_{alert['instance']}_{alert['timestamp']}"):
+                            st.info("Alert acknowledged")
+        
+        else:
+            st.success("🎉 No active alerts!")
+            st.info("All monitored systems are operating normally.")
+        
+        # Enhanced logs display
+        st.markdown("---")
+        st.subheader("📝 CloudWatch Logs Analysis")
+        
+        if all_logs:
+            # Log group selector
+            selected_log_group = st.selectbox(
+                "Select Log Group", 
+                list(all_logs.keys())
+            )
             
-            if alert['severity'] == 'critical':
+            if selected_log_group and all_logs[selected_log_group]:
+                logs = all_logs[selected_log_group]
+                
+                # Log filters
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    if st.button(f"🔧 Remediate", key=f"remediate_{alert['instance']}_{alert['timestamp']}"):
-                        st.success("Remediation action initiated")
+                    log_level = st.selectbox("Filter by Level", 
+                                        ["All", "Error", "Warning", "Info"])
                 with col2:
-                    if st.button(f"📞 Escalate", key=f"escalate_{alert['instance']}_{alert['timestamp']}"):
-                        st.info("Alert escalated to on-call engineer")
+                    search_term = st.text_input("Search in logs")
                 with col3:
-                    if st.button(f"✅ Acknowledge", key=f"ack_{alert['instance']}_{alert['timestamp']}"):
-                        st.info("Alert acknowledged")
-    
-    else:
-        st.success("🎉 No active alerts!")
-        st.info("All monitored systems are operating normally.")
-    
-    # Enhanced logs display
-    st.markdown("---")
-    st.subheader("📝 CloudWatch Logs Analysis")
-    
-    if all_logs:
-        # Log group selector
-        selected_log_group = st.selectbox(
-            "Select Log Group", 
-            list(all_logs.keys())
-        )
+                    max_logs = st.slider("Max logs to display", 10, 100, 20)
+                
+                # Filter logs
+                filtered_logs = logs[:max_logs]
+                if search_term:
+                    filtered_logs = [log for log in filtered_logs 
+                                if search_term.lower() in log['message'].lower()]
+                
+                # Display logs
+                for log in filtered_logs:
+                    timestamp = datetime.fromtimestamp(log['timestamp'] / 1000)
+                    st.text(f"[{timestamp}] {log['message']}")
         
-        if selected_log_group and all_logs[selected_log_group]:
-            logs = all_logs[selected_log_group]
-            
-            # Log filters
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                log_level = st.selectbox("Filter by Level", 
-                                       ["All", "Error", "Warning", "Info"])
-            with col2:
-                search_term = st.text_input("Search in logs")
-            with col3:
-                max_logs = st.slider("Max logs to display", 10, 100, 20)
-            
-            # Filter logs
-            filtered_logs = logs[:max_logs]
-            if search_term:
-                filtered_logs = [log for log in filtered_logs 
-                               if search_term.lower() in log['message'].lower()]
-            
-            # Display logs
-            for log in filtered_logs:
-                timestamp = datetime.fromtimestamp(log['timestamp'] / 1000)
-                st.text(f"[{timestamp}] {log['message']}")
-    
-    else:
-        st.info("No log data available. Configure log groups in the sidebar.")
+        else:
+            st.info("No log data available. Configure log groups in the sidebar.")
 
 def render_performance_tab(all_metrics):
     """Render performance analytics tab"""
