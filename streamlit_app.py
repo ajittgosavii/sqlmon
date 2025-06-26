@@ -757,27 +757,67 @@ def get_aws_manager():
     return StreamlitAWSManager()
 
 # =================== AWS CLOUDWATCH CONNECTOR ===================
+# =================== AWS CLOUDWATCH CONNECTOR ===================
 class AWSCloudWatchConnector:
     def __init__(self, aws_config: Dict):
         """Initialize AWS CloudWatch connections using the manager"""
         self.aws_config = aws_config
-        self.aws_manager = get_aws_manager()
+        self.aws_manager = None
+        self.demo_mode = True  # Default to demo mode
         
-        self.aws_manager.initialize_aws_connection(aws_config)
-        self.demo_mode = self.aws_manager.demo_mode
+        try:
+            self.aws_manager = get_aws_manager()
+            if self.aws_manager:
+                self.aws_manager.initialize_aws_connection(aws_config)
+                self.demo_mode = self.aws_manager.demo_mode
+            else:
+                logger.error("Failed to get AWS manager instance")
+                self.demo_mode = True
+        except Exception as e:
+            logger.error(f"Failed to initialize AWS CloudWatch connector: {str(e)}")
+            self.demo_mode = True
     
     def test_connection(self) -> bool:
         """Test AWS connection"""
+        if not self.aws_manager:
+            return False
         return self.aws_manager.test_connection()
     
     def get_connection_status(self) -> Dict:
-        """Get connection status"""
-        return self.aws_manager.get_connection_status()
+        """Get connection status with null safety"""
+        if not self.aws_manager:
+            return {
+                'connected': False,
+                'method': 'none',
+                'error': 'AWS manager not initialized',
+                'last_test': None,
+                'account_id': None,
+                'region': None,
+                'user_arn': None,
+                'demo_mode': True,
+                'streamlit_cloud': True
+            }
+        
+        try:
+            return self.aws_manager.get_connection_status()
+        except Exception as e:
+            logger.error(f"Error getting connection status: {str(e)}")
+            return {
+                'connected': False,
+                'method': 'error',
+                'error': f'Error getting status: {str(e)}',
+                'last_test': None,
+                'account_id': None,
+                'region': None,
+                'user_arn': None,
+                'demo_mode': True,
+                'streamlit_cloud': True
+            }
     
     def get_cloudwatch_metrics(self, metric_queries: List[Dict], 
                               start_time: datetime, end_time: datetime) -> Dict[str, List]:
         """Get CloudWatch metrics with enhanced error handling"""
-        if self.demo_mode:
+        if self.demo_mode or not self.aws_manager:
             return self._generate_demo_cloudwatch_data(metric_queries)
         
         try:
@@ -785,7 +825,7 @@ class AWSCloudWatchConnector:
             cloudwatch_client = self.aws_manager.get_client('cloudwatch')
             
             if not cloudwatch_client:
-                return {}
+                return self._generate_demo_cloudwatch_data(metric_queries)
             
             for query in metric_queries:
                 try:
@@ -813,7 +853,7 @@ class AWSCloudWatchConnector:
             
         except Exception as e:
             logger.error(f"Failed to retrieve CloudWatch metrics: {str(e)}")
-            return {}
+            return self._generate_demo_cloudwatch_data(metric_queries)
     
     def get_comprehensive_sql_metrics(self, instance_id: str, start_time: datetime, end_time: datetime) -> Dict[str, List]:
         """Get comprehensive SQL Server metrics from CloudWatch"""
@@ -909,7 +949,7 @@ class AWSCloudWatchConnector:
     
     def get_rds_instances(self) -> List[Dict]:
         """Get RDS SQL Server instances"""
-        if self.demo_mode:
+        if self.demo_mode or not self.aws_manager:
             return [
                 {
                     'DBInstanceIdentifier': 'sql-server-prod-1',
@@ -949,7 +989,7 @@ class AWSCloudWatchConnector:
     
     def get_ec2_sql_instances(self) -> List[Dict]:
         """Get EC2 instances running SQL Server"""
-        if self.demo_mode:
+        if self.demo_mode or not self.aws_manager:
             return [
                 {
                     'InstanceId': 'i-1234567890abcdef0',
@@ -997,7 +1037,7 @@ class AWSCloudWatchConnector:
     
     def get_cloudwatch_logs(self, log_group: str, hours: int = 24) -> List[Dict]:
         """Get CloudWatch logs"""
-        if self.demo_mode:
+        if self.demo_mode or not self.aws_manager:
             return self._generate_demo_log_data()
         
         try:
@@ -1022,7 +1062,7 @@ class AWSCloudWatchConnector:
     
     def get_available_log_groups(self) -> List[str]:
         """Get all available CloudWatch log groups"""
-        if self.demo_mode:
+        if self.demo_mode or not self.aws_manager:
             return [
                 "/aws/rds/instance/sql-server-prod-1/error",
                 "/aws/rds/instance/sql-server-prod-1/agent",
@@ -1047,7 +1087,7 @@ class AWSCloudWatchConnector:
     def get_sql_server_logs(self, log_groups: List[str], hours: int = 24, 
                            filter_pattern: str = None) -> Dict[str, List[Dict]]:
         """Get SQL Server specific logs from multiple log groups"""
-        if self.demo_mode:
+        if self.demo_mode or not self.aws_manager:
             return self._generate_demo_sql_logs(log_groups)
         
         try:
@@ -1089,7 +1129,7 @@ class AWSCloudWatchConnector:
     
     def get_account_info(self) -> Dict[str, str]:
         """Get AWS account information"""
-        if self.demo_mode:
+        if self.demo_mode or not self.aws_manager:
             return {
                 'account_id': '123456789012',
                 'account_alias': 'demo-sql-environment',
@@ -1982,98 +2022,146 @@ def initialize_session_state(aws_config):
         st.session_state.claude_analyzer = None
 
     # Initialize connectors if not already done or config changed
-    if (st.session_state.cloudwatch_connector is None or 
-        getattr(st.session_state.cloudwatch_connector, 'aws_config', {}) != aws_config):
-        
+    should_reinitialize = (
+        st.session_state.cloudwatch_connector is None or 
+        getattr(st.session_state.cloudwatch_connector, 'aws_config', {}) != aws_config
+    )
+    
+    if should_reinitialize:
         with st.spinner("🔄 Initializing AWS connection..."):
             try:
+                # Initialize CloudWatch connector
                 st.session_state.cloudwatch_connector = AWSCloudWatchConnector(aws_config)
-                st.session_state.always_on_monitor = AlwaysOnMonitor(st.session_state.cloudwatch_connector)
-                st.session_state.auto_remediation = AutoRemediationEngine(st.session_state.cloudwatch_connector)
-                st.session_state.predictive_analytics = PredictiveAnalyticsEngine(st.session_state.cloudwatch_connector)
                 
-                if aws_config.get('claude_api_key') and ANTHROPIC_AVAILABLE:
-                    st.session_state.claude_analyzer = ClaudeAIAnalyzer(aws_config['claude_api_key'])
-                    
-            except Exception as e:
-                st.error(f"Failed to initialize: {str(e)}")
-
-def display_connection_status():
-    """Display connection status and test button"""
-    with st.sidebar:
-        if st.button("🔌 Test AWS Connection", type="primary"):
-            with st.spinner("Testing AWS connection..."):
+                # Only initialize other components if CloudWatch connector is valid
                 if st.session_state.cloudwatch_connector:
-                    if st.session_state.cloudwatch_connector.test_connection():
-                        st.success("✅ AWS Connection Successful!")
+                    try:
+                        st.session_state.always_on_monitor = AlwaysOnMonitor(st.session_state.cloudwatch_connector)
+                    except Exception as e:
+                        logger.warning(f"Failed to initialize Always On monitor: {str(e)}")
+                        st.session_state.always_on_monitor = None
+                    
+                    try:
+                        st.session_state.auto_remediation = AutoRemediationEngine(st.session_state.cloudwatch_connector)
+                    except Exception as e:
+                        logger.warning(f"Failed to initialize auto-remediation: {str(e)}")
+                        st.session_state.auto_remediation = None
+                    
+                    try:
+                        st.session_state.predictive_analytics = PredictiveAnalyticsEngine(st.session_state.cloudwatch_connector)
+                    except Exception as e:
+                        logger.warning(f"Failed to initialize predictive analytics: {str(e)}")
+                        st.session_state.predictive_analytics = None
+                
+                # Initialize Claude AI if API key is provided
+                if aws_config.get('claude_api_key') and ANTHROPIC_AVAILABLE:
+                    try:
+                        st.session_state.claude_analyzer = ClaudeAIAnalyzer(aws_config['claude_api_key'])
+                    except Exception as e:
+                        logger.warning(f"Failed to initialize Claude AI: {str(e)}")
+                        st.session_state.claude_analyzer = None
                         
-                        conn_status = st.session_state.cloudwatch_connector.get_connection_status()
-                        if conn_status.get('account_id'):
-                            st.write(f"**Account:** {conn_status['account_id']}")
-                        if conn_status.get('user_arn'):
-                            st.write(f"**Role:** {conn_status['user_arn'].split('/')[-1]}")
-                        if conn_status.get('method'):
-                            st.write(f"**Method:** {conn_status['method'].replace('_', ' ').title()}")
-                    else:
-                        st.error("❌ AWS Connection Failed")
-                        
-                        conn_status = st.session_state.cloudwatch_connector.get_connection_status()
-                        if conn_status.get('error'):
-                            with st.expander("🔍 View Error Details"):
-                                st.error(conn_status['error'])
-                                
-                                if conn_status.get('streamlit_cloud'):
-                                    st.info("""
-                                    **Streamlit Cloud Troubleshooting:**
-                                    1. Go to your app settings in Streamlit Cloud
-                                    2. Add environment variables:
-                                       - `AWS_ACCESS_KEY_ID`
-                                       - `AWS_SECRET_ACCESS_KEY`
-                                       - `AWS_DEFAULT_REGION`
-                                    3. Restart your app
-                                    """)
-                else:
-                    st.error("❌ CloudWatch connector not initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize session state: {str(e)}")
+                st.error(f"Failed to initialize: {str(e)}")
+                
+                # Create a minimal cloudwatch connector in demo mode
+                try:
+                    st.session_state.cloudwatch_connector = AWSCloudWatchConnector(aws_config)
+                except Exception as fallback_error:
+                    logger.error(f"Even fallback initialization failed: {str(fallback_error)}")
+                    st.session_state.cloudwatch_connector = None
 
-        # Enhanced Connection Status Display
-        if st.session_state.cloudwatch_connector:
-            st.markdown("---")
-            st.subheader("🔗 Connection Status")
-            
-            conn_status = st.session_state.cloudwatch_connector.get_connection_status()
-            
-            if conn_status.get('connected'):
-                if conn_status.get('demo_mode'):
-                    status_class = "cred-warning"
-                    status_icon = "🎭"
-                    status_text = "Demo Mode"
-                else:
-                    status_class = "cred-success"
-                    status_icon = "✅"
-                    status_text = "Connected"
+    def display_connection_status():
+        """Display connection status and test button"""
+        with st.sidebar:
+            if st.button("🔌 Test AWS Connection", type="primary"):
+                with st.spinner("Testing AWS connection..."):
+                    if st.session_state.cloudwatch_connector:
+                        if st.session_state.cloudwatch_connector.test_connection():
+                            st.success("✅ AWS Connection Successful!")
+                            
+                            try:
+                                conn_status = st.session_state.cloudwatch_connector.get_connection_status()
+                                if conn_status.get('account_id'):
+                                    st.write(f"**Account:** {conn_status['account_id']}")
+                                if conn_status.get('user_arn'):
+                                    st.write(f"**Role:** {conn_status['user_arn'].split('/')[-1]}")
+                                if conn_status.get('method'):
+                                    st.write(f"**Method:** {conn_status['method'].replace('_', ' ').title()}")
+                            except Exception as e:
+                                st.warning(f"Could not get detailed connection info: {str(e)}")
+                        else:
+                            st.error("❌ AWS Connection Failed")
+                            
+                            try:
+                                conn_status = st.session_state.cloudwatch_connector.get_connection_status()
+                                if conn_status.get('error'):
+                                    with st.expander("🔍 View Error Details"):
+                                        st.error(conn_status['error'])
+                                        
+                                        if conn_status.get('streamlit_cloud'):
+                                            st.info("""
+                                            **Streamlit Cloud Troubleshooting:**
+                                            1. Go to your app settings in Streamlit Cloud
+                                            2. Add environment variables:
+                                            - `AWS_ACCESS_KEY_ID`
+                                            - `AWS_SECRET_ACCESS_KEY`
+                                            - `AWS_DEFAULT_REGION`
+                                            3. Restart your app
+                                            """)
+                            except Exception as e:
+                                st.error(f"Error getting connection status: {str(e)}")
+                    else:
+                        st.error("❌ CloudWatch connector not initialized")
+
+            # Enhanced Connection Status Display
+            if st.session_state.cloudwatch_connector:
+                st.markdown("---")
+                st.subheader("🔗 Connection Status")
+                
+                try:
+                    conn_status = st.session_state.cloudwatch_connector.get_connection_status()
+                    
+                    if conn_status.get('connected'):
+                        if conn_status.get('demo_mode'):
+                            status_class = "cred-warning"
+                            status_icon = "🎭"
+                            status_text = "Demo Mode"
+                        else:
+                            status_class = "cred-success"
+                            status_icon = "✅"
+                            status_text = "Connected"
+                    else:
+                        status_class = "cred-error"
+                        status_icon = "❌"
+                        status_text = "Disconnected"
+                    
+                    st.markdown(f"""
+                    <div class="credential-status {status_class}">
+                        <strong>{status_icon} Status:</strong> {status_text}<br>
+                        <strong>Environment:</strong> {'Streamlit Cloud' if conn_status.get('streamlit_cloud') else 'Local'}<br>
+                        <strong>Method:</strong> {safe_format_method(conn_status.get('method'))}<br>
+                        <strong>Last Test:</strong> {conn_status.get('last_test').strftime('%H:%M:%S') if conn_status.get('last_test') else 'Never'}
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    if conn_status.get('account_id'):
+                        st.write(f"**Account ID:** {conn_status['account_id']}")
+                    
+                    if conn_status.get('region'):
+                        st.write(f"**Region:** {conn_status['region']}")
+                    
+                    if conn_status.get('error'):
+                        with st.expander("🔍 View Error Details"):
+                            st.error(conn_status['error'])
+                            
+                except Exception as e:
+                    st.error(f"❌ Error displaying connection status: {str(e)}")
+                    st.info("Connection status temporarily unavailable. Try refreshing the page.")
             else:
-                status_class = "cred-error"
-                status_icon = "❌"
-                status_text = "Disconnected"
-            
-            st.markdown(f"""
-            <div class="credential-status {status_class}">
-                <strong>{status_icon} Status:</strong> {status_text}<br>
-                <strong>Environment:</strong> {'Streamlit Cloud' if conn_status.get('streamlit_cloud') else 'Local'}<br>
-                <strong>Method:</strong> {safe_format_method(conn_status.get('method'))}<br>
-                <strong>Last Test:</strong> {conn_status.get('last_test').strftime('%H:%M:%S') if conn_status.get('last_test') else 'Never'}
-            </div>
-            """, unsafe_allow_html=True)
-            
-            if conn_status.get('account_id'):
-                st.write(f"**Account ID:** {conn_status['account_id']}")
-            
-            if conn_status.get('region'):
-                st.write(f"**Region:** {conn_status['region']}")
-            
-            if conn_status.get('error'):
-                with st.expander("🔍 View Error Details"):
-                    st.error(conn_status['error'])
+                st.warning("⚠️ CloudWatch connector not available")
+                st.info("Configuration may still be loading. Please refresh the page.")
 
 # =================== DATA COLLECTION FUNCTIONS ===================
 @st.cache_data(ttl=300)
