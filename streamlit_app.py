@@ -779,47 +779,32 @@ class StreamlitAWSManager:
                     st.error("⏰ **Issue:** Your AWS credentials have expired")
                     st.info("💡 **Fix:** Generate new AWS credentials")
                 else:
-                    st.error("❌ CloudWatch connector not initialized")
-
-        # Enhanced Connection Status Display
-        if st.session_state.cloudwatch_connector:
-            st.markdown("---")
-            st.subheader("🔗 Connection Status")
+                    st.error(f"❓ **Unknown AWS Error:** {error_code}")
+                
+                # Show the full error details
+                with st.expander("🔍 Full Error Details"):
+                    st.json(e.response)
             
-            conn_status = st.session_state.cloudwatch_connector.get_connection_status()
+            self.connection_status['error'] = f"{error_code}: {error_message}"
+            return False
             
-            if conn_status.get('connected'):
-                if conn_status.get('demo_mode'):
-                    status_class = "cred-warning"
-                    status_icon = "🎭"
-                    status_text = "Demo Mode"
-                else:
-                    status_class = "cred-success"
-                    status_icon = "✅"
-                    status_text = "Connected"
-            else:
-                status_class = "cred-error"
-                status_icon = "❌"
-                status_text = "Disconnected"
+        except Exception as e:
+            # Show unexpected errors
+            with st.container():
+                st.error(f"❌ **Unexpected Error:** {str(e)}")
+                st.error(f"📝 **Error Type:** {type(e).__name__}")
+                
+                # Show more details for debugging
+                with st.expander("🔍 Technical Details"):
+                    st.code(f"""
+Error Type: {type(e).__name__}
+Error Message: {str(e)}
+Method: {method_name}
+Region: {session.region_name if session else 'Unknown'}
+                    """)
             
-            st.markdown(f"""
-            <div class="credential-status {status_class}">
-                <strong>{status_icon} Status:</strong> {status_text}<br>
-                <strong>Environment:</strong> {'Streamlit Cloud' if conn_status.get('streamlit_cloud') else 'Local'}<br>
-                <strong>Method:</strong> {safe_format_method(conn_status.get('method'))}<br>
-                <strong>Last Test:</strong> {conn_status.get('last_test').strftime('%H:%M:%S') if conn_status.get('last_test') else 'Never'}
-            </div>
-            """, unsafe_allow_html=True)
-            
-            if conn_status.get('account_id'):
-                st.write(f"**Account ID:** {conn_status['account_id']}")
-            
-            if conn_status.get('region'):
-                st.write(f"**Region:** {conn_status['region']}")
-            
-            if conn_status.get('error'):
-                with st.expander("🔍 View Error Details"):
-                    st.error(conn_status['error'])
+            self.connection_status['error'] = f"Unexpected error: {str(e)}"
+            return False
 
 def show_tagging_instructions():
     """Show instructions for manually tagging instances"""
@@ -1739,7 +1724,7 @@ def render_alerts_tab(all_metrics, all_logs):
     """Render alerts tab with configuration-based alerts"""
     st.header("🚨 Intelligent Alert Management")
     
-    # NEW: Add configuration-based alerts FIRST
+    # Configuration-based alerts
     config_manager = get_embedded_config_manager()
     if all_logs:
         config_alerts = generate_alerts_from_config(all_logs, config_manager)
@@ -1769,8 +1754,6 @@ def render_alerts_tab(all_metrics, all_logs):
             
             if len(config_alerts) > 5:
                 st.info(f"💡 Showing 5 of {len(config_alerts)} total alerts. Check individual log groups for more details.")
-    
-    # EXISTING CODE CONTINUES BELOW (keep everything as-is)
     
     # Generate current alerts based on metrics
     current_alerts = []
@@ -2231,15 +2214,7 @@ def main():
         {'key': 'network_out', 'namespace': 'AWS/EC2', 'metric_name': 'NetworkOut', 'unit': 'Bytes'}
     ]
     
-    # Get basic infrastructure metrics
-    if st.session_state.cloudwatch_connector:
-        current_time = datetime.now()
-        start_time = current_time - timedelta(hours=24)
-        basic_metrics = st.session_state.cloudwatch_connector.get_cloudwatch_metrics(
-            basic_metric_queries, start_time, current_time
-        )
-        all_metrics.update(basic_metrics)
-    
+       
     # Main tabs
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
         "🏠 Dashboard", 
@@ -2328,7 +2303,7 @@ def main():
             st.rerun()
 
 if __name__ == "__main__":
-    main().error(f"❓ **Unknown AWS Error:** {error_code}")
+    main()f"❓ **Unknown AWS Error:** {error_code}")
                 
                 # Show the full error details
                 with st.expander("🔍 Full Error Details"):
@@ -4102,46 +4077,6 @@ def display_connection_status():
                 else:
                     st.error("❌ CloudWatch connector not initialized")
 
-        # Enhanced Connection Status Display
-        if st.session_state.cloudwatch_connector:
-            st.markdown("---")
-            st.subheader("🔗 Connection Status")
-            
-            conn_status = st.session_state.cloudwatch_connector.get_connection_status()
-            
-            if conn_status.get('connected'):
-                if conn_status.get('demo_mode'):
-                    status_class = "cred-warning"
-                    status_icon = "🎭"
-                    status_text = "Demo Mode"
-                else:
-                    status_class = "cred-success"
-                    status_icon = "✅"
-                    status_text = "Connected"
-            else:
-                status_class = "cred-error"
-                status_icon = "❌"
-                status_text = "Disconnected"
-            
-            st.markdown(f"""
-            <div class="credential-status {status_class}">
-                <strong>{status_icon} Status:</strong> {status_text}<br>
-                <strong>Environment:</strong> {'Streamlit Cloud' if conn_status.get('streamlit_cloud') else 'Local'}<br>
-                <strong>Method:</strong> {safe_format_method(conn_status.get('method'))}<br>
-                <strong>Last Test:</strong> {conn_status.get('last_test').strftime('%H:%M:%S') if conn_status.get('last_test') else 'Never'}
-            </div>
-            """, unsafe_allow_html=True)
-            
-            if conn_status.get('account_id'):
-                st.write(f"**Account ID:** {conn_status['account_id']}")
-            
-            if conn_status.get('region'):
-                st.write(f"**Region:** {conn_status['region']}")
-            
-            if conn_status.get('error'):
-                with st.expander("🔍 View Error Details"):
-                    st.error(conn_status['error'])
-
 def show_tagging_instructions():
     """Show instructions for manually tagging instances"""
     st.subheader("🏷️ How to Tag EC2 Instances for SQL Server")
@@ -5056,192 +4991,7 @@ def render_predictive_analytics_tab(all_metrics, enable_predictive_alerts):
         st.warning("🔒 Predictive analytics is currently disabled")
         st.info("Enable predictive alerts in the sidebar to see trend analysis and capacity planning insights.")
 
-    # =================== UPDATED render_alerts_tab FUNCTION ===================
-    def render_alerts_tab(all_metrics, all_logs):
-        """Render alerts tab with configuration-based alerts"""
-        st.header("🚨 Intelligent Alert Management")
-        
-        # NEW: Add configuration-based alerts FIRST
-        config_manager = get_embedded_config_manager()
-        if all_logs:
-            config_alerts = generate_alerts_from_config(all_logs, config_manager)
-            
-            if config_alerts:
-                st.subheader("⚙️ Configuration-Based Alerts")
-                st.info(f"🔍 Found {len(config_alerts)} alerts based on configured patterns")
-                
-                for alert in config_alerts[:5]:  # Show first 5 alerts
-                    severity_style = "alert-critical" if alert['severity'] == 'critical' else "alert-warning"
-                    st.markdown(f"""
-                    <div class="{severity_style}">
-                        <strong>🚨 {alert['severity'].upper()}</strong> - {alert['instance']}<br>
-                        <strong>📍 Source:</strong> {alert['source']}<br>
-                        <strong>🎯 Pattern:</strong> {alert['pattern_matched']}<br>
-                        <strong>💬 Message:</strong> {alert['message']}<br>
-                        <strong>⏰ Time:</strong> {alert['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}<br>
-                        <strong>🤖 Auto-Remediation:</strong> {alert['auto_remediation']}
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # Show original log message
-                    with st.expander(f"📝 View Original Log Message"):
-                        st.code(alert['original_message'])
-                    
-                    st.markdown("---")
-                
-                if len(config_alerts) > 5:
-                    st.info(f"💡 Showing 5 of {len(config_alerts)} total alerts. Check individual log groups for more details.")
-        
-        # EXISTING CODE CONTINUES BELOW (keep everything as-is)
-        
-        # Generate current alerts based on metrics
-        current_alerts = []
-        
-        # Check for critical conditions
-        if all_metrics.get('cpu_usage'):
-            latest_cpu = all_metrics['cpu_usage'][-1]['Average']
-            if latest_cpu > 90:
-                current_alerts.append({
-                    'timestamp': datetime.now(),
-                    'severity': 'critical',
-                    'source': 'CloudWatch',
-                    'instance': 'System Average',
-                    'message': f'Critical CPU utilization detected ({latest_cpu:.1f}%)',
-                    'auto_remediation': 'Available'
-                })
-            elif latest_cpu > 80:
-                current_alerts.append({
-                    'timestamp': datetime.now(),
-                    'severity': 'warning',
-                    'source': 'CloudWatch',
-                    'instance': 'System Average',
-                    'message': f'High CPU utilization detected ({latest_cpu:.1f}%)',
-                    'auto_remediation': 'Available'
-                })
-        
-        # Add demo alerts for demonstration
-        if st.session_state.cloudwatch_connector.demo_mode:
-            demo_alerts = [
-                {
-                    'timestamp': datetime.now() - timedelta(minutes=5),
-                    'severity': 'warning',
-                    'source': 'Always On Monitor',
-                    'instance': 'AG-Production',
-                    'message': 'Synchronization lag detected (3.2 seconds)',
-                    'auto_remediation': 'Manual'
-                },
-                {
-                    'timestamp': datetime.now() - timedelta(hours=1),
-                    'severity': 'info',
-                    'source': 'Predictive Analytics',
-                    'instance': 'sql-server-prod-2',
-                    'message': 'Memory usage trend increasing - action recommended within 24h',
-                    'auto_remediation': 'Scheduled'
-                }
-            ]
-            current_alerts.extend(demo_alerts)
-        
-        # Alert summary
-        col1, col2, col3, col4 = st.columns(4)
-        
-        critical_alerts = [a for a in current_alerts if a['severity'] == 'critical']
-        warning_alerts = [a for a in current_alerts if a['severity'] == 'warning']
-        info_alerts = [a for a in current_alerts if a['severity'] == 'info']
-        
-        with col1:
-            st.metric("🔴 Critical", len(critical_alerts))
-        
-        with col2:
-            st.metric("🟡 Warning", len(warning_alerts))
-        
-        with col3:
-            st.metric("🔵 Info", len(info_alerts))
-        
-        with col4:
-            auto_remediated = [a for a in current_alerts if a['auto_remediation'] == 'Available']
-            st.metric("🤖 Auto-Remediation", len(auto_remediated))
-        
-        st.markdown("---")
-        
-        # Alert list
-        if current_alerts:
-            st.subheader("📋 Active Alerts")
-            
-            for alert in current_alerts:
-                severity_styles = {
-                    'critical': 'alert-critical',
-                    'warning': 'alert-warning',
-                    'info': 'claude-insight'
-                }
-                
-                style_class = severity_styles.get(alert['severity'], 'metric-card')
-                timestamp_str = alert['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
-                
-                st.markdown(f"""
-                <div class="{style_class}">
-                    <strong>{alert['severity'].upper()}</strong> - {alert['instance']}<br>
-                    <strong>Source:</strong> {alert['source']}<br>
-                    <strong>Message:</strong> {alert['message']}<br>
-                    <strong>Time:</strong> {timestamp_str}<br>
-                    <strong>Auto-Remediation:</strong> {alert['auto_remediation']}
-                </div>
-                """, unsafe_allow_html=True)
-                
-                if alert['severity'] == 'critical':
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        if st.button(f"🔧 Remediate", key=f"remediate_{alert['instance']}_{alert['timestamp']}"):
-                            st.success("Remediation action initiated")
-                    with col2:
-                        if st.button(f"📞 Escalate", key=f"escalate_{alert['instance']}_{alert['timestamp']}"):
-                            st.info("Alert escalated to on-call engineer")
-                    with col3:
-                        if st.button(f"✅ Acknowledge", key=f"ack_{alert['instance']}_{alert['timestamp']}"):
-                            st.info("Alert acknowledged")
-        
-        else:
-            st.success("🎉 No active alerts!")
-            st.info("All monitored systems are operating normally.")
-        
-        # Enhanced logs display
-        st.markdown("---")
-        st.subheader("📝 CloudWatch Logs Analysis")
-        
-        if all_logs:
-            # Log group selector
-            selected_log_group = st.selectbox(
-                "Select Log Group", 
-                list(all_logs.keys())
-            )
-            
-            if selected_log_group and all_logs[selected_log_group]:
-                logs = all_logs[selected_log_group]
-                
-                # Log filters
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    log_level = st.selectbox("Filter by Level", 
-                                        ["All", "Error", "Warning", "Info"])
-                with col2:
-                    search_term = st.text_input("Search in logs")
-                with col3:
-                    max_logs = st.slider("Max logs to display", 10, 100, 20)
-                
-                # Filter logs
-                filtered_logs = logs[:max_logs]
-                if search_term:
-                    filtered_logs = [log for log in filtered_logs 
-                                if search_term.lower() in log['message'].lower()]
-                
-                # Display logs
-                for log in filtered_logs:
-                    timestamp = datetime.fromtimestamp(log['timestamp'] / 1000)
-                    st.text(f"[{timestamp}] {log['message']}")
-        
-        else:
-            st.info("No log data available. Configure log groups in the sidebar.")
-
-def render_performance_tab(all_metrics):
+    def render_performance_tab(all_metrics):
     """Render performance analytics tab"""
     st.header("📊 Advanced Performance Analytics")
     
