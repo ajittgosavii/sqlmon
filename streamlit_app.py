@@ -3019,11 +3019,11 @@ def initialize_session_state(aws_config):
     if 'always_on_monitor' not in st.session_state:
         st.session_state.always_on_monitor = None
     
-    if 'auto_remediation' not in st.session_state:
-        st.session_state.auto_remediation = None
+    if 'enhanced_auto_remediation' not in st.session_state:
+        st.session_state.enhanced_auto_remediation = None
     
-    if 'predictive_analytics' not in st.session_state:
-        st.session_state.predictive_analytics = None
+    if 'enhanced_predictive_analytics' not in st.session_state:
+        st.session_state.enhanced_predictive_analytics = None
     
     if 'claude_analyzer' not in st.session_state:
         st.session_state.claude_analyzer = None
@@ -3036,41 +3036,23 @@ def initialize_session_state(aws_config):
             try:
                 st.session_state.cloudwatch_connector = AWSCloudWatchConnector(aws_config)
                 st.session_state.always_on_monitor = AlwaysOnMonitor(st.session_state.cloudwatch_connector)
-                st.session_state.auto_remediation = EnhancedAutoRemediationEngine(st.session_state.cloudwatch_connector)
-                st.session_state.predictive_analytics = EnhancedPredictiveAnalyticsEngine(st.session_state.cloudwatch_connector)
+                
+                # Initialize enhanced engines if CloudWatch connector is available
+                if st.session_state.cloudwatch_connector:
+                    st.session_state.enhanced_auto_remediation = EnhancedAutoRemediationEngine(
+                        st.session_state.cloudwatch_connector
+                    )
+                    st.session_state.enhanced_predictive_analytics = EnhancedPredictiveAnalyticsEngine(
+                        st.session_state.cloudwatch_connector
+                    )
                 
                 if aws_config.get('claude_api_key') and ANTHROPIC_AVAILABLE:
                     st.session_state.claude_analyzer = ClaudeAIAnalyzer(aws_config['claude_api_key'])
                     
             except Exception as e:
                 st.error(f"Failed to initialize: {str(e)}")
-    
-    # Initialize enhanced engines
-    if 'enhanced_auto_remediation' not in st.session_state:
-        st.session_state.enhanced_auto_remediation = None
-    
-    if 'enhanced_predictive_analytics' not in st.session_state:
-        st.session_state.enhanced_predictive_analytics = None
-    
-    # Initialize enhanced engines if CloudWatch connector is available
-    if (st.session_state.cloudwatch_connector and 
-        st.session_state.enhanced_auto_remediation is None):
-        
-        st.session_state.enhanced_auto_remediation = EnhancedAutoRemediationEngine(
-            st.session_state.cloudwatch_connector
-        )
-        
-        st.session_state.enhanced_predictive_analytics = EnhancedPredictiveAnalyticsEngine(
-            st.session_state.cloudwatch_connector
-        )
-    try:
-        st.session_state.cloudwatch_connector = AWSCloudWatchConnector(aws_config)
-        st.session_state.always_on_monitor = AlwaysOnMonitor(st.session_state.cloudwatch_connector)
-        st.session_state.auto_remediation = EnhancedAutoRemediationEngine(st.session_state.cloudwatch_connector)  # ✅ Fixed
-        st.session_state.predictive_analytics = EnhancedPredictiveAnalyticsEngine(st.session_state.cloudwatch_connector)
-        
-except Exception as e:
-    st.error(f"Failed to initialize: {str(e)}")
+                # Set demo mode if initialization fails
+                st.session_state.cloudwatch_connector = None
     
     
     
