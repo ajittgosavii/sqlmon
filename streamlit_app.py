@@ -542,19 +542,7 @@ def test_log_groups(log_groups):
         except Exception as e:
             results.append({"log_group": log_group, "status": "❌ Error", "message": str(e)})
     
-    # Display results
-    for result in results:
-        if result["status"].startswith("✅"):
-            st.success(f'{result["status"]} **{result["log_group"]}** - {result["message"]}')
-        elif result["status"].startswith("⚠️"):
-            st.warning(f'{result["status"]} **{result["log_group"]}** - {result["message"]}')
-        else:
-            st.error(f'{result["status"]} **{result["log_group"]}** - {result["message"]}')
-
-
-
-
-# =================== AWS CloudWatch Integration ===================
+   # =================== AWS CloudWatch Integration ===================
 class AWSCloudWatchConnector:
     def __init__(self, aws_config: Dict):
         """Initialize AWS CloudWatch connections using the manager"""
