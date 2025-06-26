@@ -2014,244 +2014,263 @@ def render_performance_tab(all_metrics):
         if st.session_state.cloudwatch_connector.demo_mode:
             st.info("🎭 **Demo Mode:** Real performance data will appear when connected to AWS")
 
-def render_reports_tab():
-    """Render reports tab"""
-    st.header("📈 Executive Reports & Analytics")
-    
-    # Report selector
-    report_type = st.selectbox("Select Report Type", [
-        "Executive Summary",
-        "Performance Report",
-        "Availability Report",
-        "Capacity Planning",
-        "Security Assessment",
-        "Cost Analysis"
-    ])
-    
-    if report_type == "Executive Summary":
-        st.subheader("📊 Executive Summary Report")
+    # Setup logging
+    logger = logging.getLogger(__name__)
+
+    def render_reports_tab():
+        """Render reports tab"""
+        st.header("📈 Executive Reports & Analytics")
         
-        # Calculate metrics for summary
-        system_health = 87
-        all_metrics = {}  # Initialize as empty dict
-        if hasattr(st.session_state, 'cloudwatch_connector') and st.session_state.cloudwatch_connector:
+        # Report selector
+        report_type = st.selectbox("Select Report Type", [
+            "Executive Summary",
+            "Performance Report",
+            "Availability Report",
+            "Capacity Planning",
+            "Security Assessment",
+            "Cost Analysis"
+        ])
+        
+        if report_type == "Executive Summary":
+            st.subheader("📊 Executive Summary Report")
+            
+            # Calculate metrics for summary
+            system_health = 87
+            all_metrics = {}  # Initialize as empty dict
+            
+            if hasattr(st.session_state, 'cloudwatch_connector') and st.session_state.cloudwatch_connector:
+                try:
+                    # Try to get metrics if available
+                    all_metrics, _, _ = collect_comprehensive_metrics()
+                    if all_metrics.get('cpu_usage') and all_metrics.get('memory_usage'):
+                        avg_cpu = np.mean([dp['Average'] for dp in all_metrics['cpu_usage'][-10:]])
+                        avg_mem = np.mean([dp['Average'] for dp in all_metrics['memory_usage'][-10:]])
+                        system_health = max(0, 100 - ((avg_cpu + avg_mem) / 2))
+                except Exception as e:
+                    logger.warning(f"Could not collect metrics: {str(e)}")
+                    pass  # Use default value if metrics unavailable
+            
+            # Key metrics summary
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <h3>🎯 System Health</h3>
+                    <p><strong>Overall Score:</strong> {system_health:.0f}/100</p>
+                    <p><strong>Availability:</strong> 99.95%</p>
+                    <p><strong>Performance:</strong> {'Good' if system_health > 70 else 'Poor'}</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col2:
+                remediation_count = 0
+                st.markdown(f"""
+                <div class="metric-card">
+                    <h3>🔧 Maintenance</h3>
+                    <p><strong>Active Alerts:</strong> {remediation_count}</p>
+                    <p><strong>Auto-Remediated:</strong> 15 issues</p>
+                    <p><strong>Manual Actions:</strong> 2 pending</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col3:
+                st.markdown("""
+                <div class="metric-card">
+                    <h3>💰 Cost Optimization</h3>
+                    <p><strong>Potential Savings:</strong> $2,400/month</p>
+                    <p><strong>Right-sizing:</strong> 3 opportunities</p>
+                    <p><strong>Efficiency:</strong> 85%</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Recommendations
+            st.subheader("💡 Key Recommendations")
+            recommendations = [
+                "**Monitor CPU utilization** - Currently averaging above baseline",
+                "**Optimize backup strategy** - Consider incremental backups for large databases",
+                "**Review Always On configuration** - Ensure optimal synchronization",
+                "**Implement automated scaling** - Based on predictive analytics"
+            ]
+            
+            for rec in recommendations:
+                st.write(f"• {rec}")
+            
+        elif report_type == "Performance Report":
+            st.subheader("📊 Detailed Performance Report")
+            
+            # Performance summary table
+            performance_data = []
+            all_metrics = {}  # Initialize as empty dict
+            
             try:
-                # Try to get metrics if available
                 all_metrics, _, _ = collect_comprehensive_metrics()
-                if all_metrics.get('cpu_usage') and all_metrics.get('memory_usage'):
+            except Exception as e:
+                logger.warning(f"Could not collect metrics for performance report: {str(e)}")
+                pass  # Use defaults if metrics unavailable
+            
+            if all_metrics.get('cpu_usage'):
+                try:
                     avg_cpu = np.mean([dp['Average'] for dp in all_metrics['cpu_usage'][-10:]])
-                    avg_mem = np.mean([dp['Average'] for dp in all_metrics['memory_usage'][-10:]])
-                    system_health = max(0, 100 - ((avg_cpu + avg_mem) / 2))
-            except:
-                pass  # Use default value if metrics unavailable
+                    performance_data.append({
+                        'Metric': 'Average CPU Usage',
+                        'Current': f'{avg_cpu:.1f}%',
+                        'Target': '<70%',
+                        'Status': '🟢 Good' if avg_cpu < 70 else '🟡 Monitor' if avg_cpu < 85 else '🔴 Critical'
+                    })
+                except Exception as e:
+                    logger.warning(f"Error processing CPU usage data: {str(e)}")
+            
+            if all_metrics.get('memory_usage'):
+                try:
+                    avg_memory = np.mean([dp['Average'] for dp in all_metrics['memory_usage'][-10:]])
+                    performance_data.append({
+                        'Metric': 'Average Memory Usage',
+                        'Current': f'{avg_memory:.1f}%',
+                        'Target': '<85%',
+                        'Status': '🟢 Good' if avg_memory < 85 else '🟡 Monitor' if avg_memory < 95 else '🔴 Critical'
+                    })
+                except Exception as e:
+                    logger.warning(f"Error processing memory usage data: {str(e)}")
+            
+            # Add default entries for demo
+            performance_data.extend([
+                {'Metric': 'Disk I/O Latency', 'Current': '12ms', 'Target': '<15ms', 'Status': '🟢 Good'},
+                {'Metric': 'AG Sync Lag', 'Current': '2.1s', 'Target': '<5s', 'Status': '🟢 Good'},
+                {'Metric': 'Backup Success Rate', 'Current': '99.2%', 'Target': '>99%', 'Status': '🟢 Good'}
+            ])
+            
+            if performance_data:
+                performance_df = pd.DataFrame(performance_data)
+                st.dataframe(performance_df, use_container_width=True)
+            
+        elif report_type == "Availability Report":
+            st.subheader("📊 Availability Report")
+            
+            # Availability metrics
+            availability_data = {
+                'Service': ['Primary SQL Server', 'Secondary Replica', 'Backup Services', 'Monitoring'],
+                'Uptime %': [99.95, 99.87, 99.99, 100.0],
+                'Downtime (minutes)': [2.2, 9.4, 0.4, 0.0],
+                'Last Incident': ['2 days ago', '1 week ago', '1 month ago', 'None'],
+                'SLA Status': ['✅ Met', '✅ Met', '✅ Met', '✅ Met']
+            }
+            
+            availability_df = pd.DataFrame(availability_data)
+            st.dataframe(availability_df, use_container_width=True)
+            
+        elif report_type == "Capacity Planning":
+            st.subheader("📈 Capacity Planning Report")
+            
+            # Capacity projections
+            capacity_data = {
+                'Resource': ['CPU', 'Memory', 'Storage', 'Connections'],
+                'Current Usage': [68, 82, 45, 85],
+                '30-Day Projection': [75, 85, 52, 92],
+                '90-Day Projection': [82, 88, 65, 98],
+                'Action Required': ['Monitor', 'Plan Upgrade', 'Expand Storage', 'Optimize Pooling']
+            }
+            
+            capacity_df = pd.DataFrame(capacity_data)
+            st.dataframe(capacity_df, use_container_width=True)
+            
+            # Capacity visualization
+            try:
+                fig = go.Figure()
+                
+                fig.add_trace(go.Bar(
+                    name='Current',
+                    x=capacity_data['Resource'],
+                    y=capacity_data['Current Usage']
+                ))
+                
+                fig.add_trace(go.Bar(
+                    name='30-Day Projection',
+                    x=capacity_data['Resource'],
+                    y=capacity_data['30-Day Projection']
+                ))
+                
+                fig.add_trace(go.Bar(
+                    name='90-Day Projection',
+                    x=capacity_data['Resource'],
+                    y=capacity_data['90-Day Projection']
+                ))
+                
+                fig.update_layout(
+                    title="Capacity Utilization Projections",
+                    xaxis_title="Resource",
+                    yaxis_title="Usage %",
+                    barmode='group'
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.error(f"Error creating capacity chart: {str(e)}")
+                st.info("Chart visualization is temporarily unavailable")
         
-        # Key metrics summary
+        elif report_type == "Security Assessment":
+            st.subheader("🔒 Security Assessment Report")
+            
+            security_data = {
+                'Security Control': [
+                    'Authentication Methods',
+                    'Encryption at Rest',
+                    'Encryption in Transit',
+                    'Access Controls',
+                    'Audit Logging',
+                    'Backup Encryption'
+                ],
+                'Status': ['✅ Compliant', '✅ Compliant', '✅ Compliant', '⚠️ Review', '✅ Compliant', '✅ Compliant'],
+                'Last Reviewed': ['1 week ago', '2 weeks ago', '1 week ago', '1 month ago', '3 days ago', '2 weeks ago'],
+                'Risk Level': ['Low', 'Low', 'Low', 'Medium', 'Low', 'Low']
+            }
+            
+            security_df = pd.DataFrame(security_data)
+            st.dataframe(security_df, use_container_width=True)
+            
+        elif report_type == "Cost Analysis":
+            st.subheader("💰 Cost Analysis Report")
+            
+            cost_data = {
+                'Resource': ['EC2 Instances', 'RDS Storage', 'Data Transfer', 'CloudWatch', 'Backup Storage'],
+                'Monthly Cost': ['$1,245', '$890', '$234', '$156', '$445'],
+                'Trend': ['📈 +5%', '📈 +12%', '📊 Stable', '📊 Stable', '📈 +8%'],
+                'Optimization': ['Right-size', 'Archive old data', 'Use VPC endpoints', 'Reduce retention', 'Lifecycle policy']
+            }
+            
+            cost_df = pd.DataFrame(cost_data)
+            st.dataframe(cost_df, use_container_width=True)
+            
+        else:
+            st.info(f"Report type '{report_type}' would be displayed here")
+        
+        # Export options
+        st.markdown("---")
+        st.subheader("📥 Export Options")
+        
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            st.markdown(f"""
-            <div class="metric-card">
-                <h3>🎯 System Health</h3>
-                <p><strong>Overall Score:</strong> {system_health:.0f}/100</p>
-                <p><strong>Availability:</strong> 99.95%</p>
-                <p><strong>Performance:</strong> {'Good' if system_health > 70 else 'Poor'}</p>
-            </div>
-            """, unsafe_allow_html=True)
+            if st.button("📊 Export to Excel"):
+                st.info("Excel report would be generated and downloaded")
         
         with col2:
-            remediation_count = 0
-            st.markdown(f"""
-            <div class="metric-card">
-                <h3>🔧 Maintenance</h3>
-                <p><strong>Active Alerts:</strong> {remediation_count}</p>
-                <p><strong>Auto-Remediated:</strong> 15 issues</p>
-                <p><strong>Manual Actions:</strong> 2 pending</p>
-            </div>
-            """, unsafe_allow_html=True)
+            if st.button("📄 Generate PDF"):
+                st.info("PDF report would be generated and downloaded")
         
         with col3:
-            st.markdown("""
-            <div class="metric-card">
-                <h3>💰 Cost Optimization</h3>
-                <p><strong>Potential Savings:</strong> $2,400/month</p>
-                <p><strong>Right-sizing:</strong> 3 opportunities</p>
-                <p><strong>Efficiency:</strong> 85%</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Recommendations
-        st.subheader("💡 Key Recommendations")
-        recommendations = [
-            "**Monitor CPU utilization** - Currently averaging above baseline",
-            "**Optimize backup strategy** - Consider incremental backups for large databases",
-            "**Review Always On configuration** - Ensure optimal synchronization",
-            "**Implement automated scaling** - Based on predictive analytics"
-        ]
-        
-        for rec in recommendations:
-            st.write(f"• {rec}")
-        
-    elif report_type == "Performance Report":
-        st.subheader("📊 Detailed Performance Report")
-        
-        # Performance summary table
-        performance_data = []
-        all_metrics = {}  # Initialize as empty dict
-        
-        try:
-            all_metrics, _, _ = collect_comprehensive_metrics()
-        except:
-            pass  # Use defaults if metrics unavailable
-        
-        if all_metrics.get('cpu_usage'):
-            avg_cpu = np.mean([dp['Average'] for dp in all_metrics['cpu_usage'][-10:]])
-            performance_data.append({
-                'Metric': 'Average CPU Usage',
-                'Current': f'{avg_cpu:.1f}%',
-                'Target': '<70%',
-                'Status': '🟢 Good' if avg_cpu < 70 else '🟡 Monitor' if avg_cpu < 85 else '🔴 Critical'
-            })
-        
-        if all_metrics.get('memory_usage'):
-            avg_memory = np.mean([dp['Average'] for dp in all_metrics['memory_usage'][-10:]])
-            performance_data.append({
-                'Metric': 'Average Memory Usage',
-                'Current': f'{avg_memory:.1f}%',
-                'Target': '<85%',
-                'Status': '🟢 Good' if avg_memory < 85 else '🟡 Monitor' if avg_memory < 95 else '🔴 Critical'
-            })
-        
-        # Add default entries for demo
-        performance_data.extend([
-            {'Metric': 'Disk I/O Latency', 'Current': '12ms', 'Target': '<15ms', 'Status': '🟢 Good'},
-            {'Metric': 'AG Sync Lag', 'Current': '2.1s', 'Target': '<5s', 'Status': '🟢 Good'},
-            {'Metric': 'Backup Success Rate', 'Current': '99.2%', 'Target': '>99%', 'Status': '🟢 Good'}
-        ])
-        
-        if performance_data:
-            performance_df = pd.DataFrame(performance_data)
-            st.dataframe(performance_df, use_container_width=True)
-        
-    elif report_type == "Capacity Planning":
-        st.subheader("📈 Capacity Planning Report")
-        
-        # Capacity projections
-        capacity_data = {
-            'Resource': ['CPU', 'Memory', 'Storage', 'Connections'],
-            'Current Usage': [68, 82, 45, 85],
-            '30-Day Projection': [75, 85, 52, 92],
-            '90-Day Projection': [82, 88, 65, 98],
-            'Action Required': ['Monitor', 'Plan Upgrade', 'Expand Storage', 'Optimize Pooling']
-        }
-        
-        capacity_df = pd.DataFrame(capacity_data)
-        st.dataframe(capacity_df, use_container_width=True)
-        
-        # Capacity visualization
-        fig = go.Figure()
-        
-        fig.add_trace(go.Bar(
-            name='Current',
-            x=capacity_data['Resource'],
-            y=capacity_data['Current Usage']
-        ))
-        
-        fig.add_trace(go.Bar(
-            name='30-Day Projection',
-            x=capacity_data['Resource'],
-            y=capacity_data['30-Day Projection']
-        ))
-        
-        fig.add_trace(go.Bar(
-            name='90-Day Projection',
-            x=capacity_data['Resource'],
-            y=capacity_data['90-Day Projection']
-        ))
-        
-        fig.update_layout(
-            title="Capacity Utilization Projections",
-            xaxis_title="Resource",
-            yaxis_title="Usage %",
-            barmode='group'
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-    
-    else:
-        st.info(f"Report type '{report_type}' would be displayed here")
-    
-    # Export options
-    st.markdown("---")
-    st.subheader("📥 Export Options")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("📊 Export to Excel"):
-            st.info("Excel report would be generated and downloaded")
-    
-    with col2:
-        if st.button("📄 Generate PDF"):
-            st.info("PDF report would be generated and downloaded")
-    
-    with col3:
-        if st.button("📧 Email Report"):
-            st.info("Report would be emailed to stakeholders")
+            if st.button("📧 Email Report"):
+                st.info("Report would be emailed to stakeholders")
 
 
-                
-                # Show the full error details
-                with st.expander("🔍 Full Error Details"):
-                    st.json(e.response)
-            
-            self.connection_status['error'] = f"{error_code}: {error_message}"
-            return False
-            
-        except Exception as e:
-            # Show unexpected errors
-            with st.container():
-                st.error(f"❌ **Unexpected Error:** {str(e)}")
-                st.error(f"📝 **Error Type:** {type(e).__name__}")
-                
-                # Show more details for debugging
-                with st.expander("🔍 Technical Details"):
-                    st.code(f"""
-Error Type: {type(e).__name__}
-Error Message: {str(e)}
-Method: {method_name}
-Region: {session.region_name if session else 'Unknown'}
-                    """)
-            
-            self.connection_status['error'] = f"Unexpected error: {str(e)}"
-            return False
-    
-    def _initialize_clients(self):
-        """Initialize AWS service clients with optimized configuration"""
-        if not self.aws_session:
-            return
-        
-        config = Config(
-            region_name=self.aws_session.region_name,
-            retries={'max_attempts': 3, 'mode': 'adaptive'},
-            max_pool_connections=50,
-            read_timeout=60,
-            connect_timeout=30
-        )
-        
-        try:
-            self.clients = {
-                'cloudwatch': self.aws_session.client('cloudwatch', config=config),
-                'logs': self.aws_session.client('logs', config=config),
-                'rds': self.aws_session.client('rds', config=config),
-                'ec2': self.aws_session.client('ec2', config=config),
-                'ssm': self.aws_session.client('ssm', config=config),
-                'lambda': self.aws_session.client('lambda', config=config),
-                'sts': self.aws_session.client('sts', config=config)
-            }
-            logger.info("AWS clients initialized successfully")
-        except Exception as e:
-            self.connection_status['error'] = f"Failed to initialize AWS clients: {str(e)}"
-            self.clients = {}
+    # Placeholder for collect_comprehensive_metrics function
+    def collect_comprehensive_metrics():
+        """
+        Placeholder function for collecting comprehensive metrics
+        Should be implemented based on your specific requirements
+        """
+        # Return empty defaults for now
+        return {}, [], []
     
     def get_client(self, service_name: str):
         """Get AWS client for specified service"""
