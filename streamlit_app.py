@@ -3036,8 +3036,8 @@ def initialize_session_state(aws_config):
             try:
                 st.session_state.cloudwatch_connector = AWSCloudWatchConnector(aws_config)
                 st.session_state.always_on_monitor = AlwaysOnMonitor(st.session_state.cloudwatch_connector)
-                st.session_state.auto_remediation = AutoRemediationEngine(st.session_state.cloudwatch_connector)
-                st.session_state.predictive_analytics = PredictiveAnalyticsEngine(st.session_state.cloudwatch_connector)
+                st.session_state.auto_remediation = EnhancedAutoRemediationEngine(st.session_state.cloudwatch_connector)
+                st.session_state.predictive_analytics = EnhancedPredictiveAnalyticsEngine(st.session_state.cloudwatch_connector)
                 
                 if aws_config.get('claude_api_key') and ANTHROPIC_AVAILABLE:
                     st.session_state.claude_analyzer = ClaudeAIAnalyzer(aws_config['claude_api_key'])
@@ -3063,6 +3063,13 @@ def initialize_session_state(aws_config):
         st.session_state.enhanced_predictive_analytics = EnhancedPredictiveAnalyticsEngine(
             st.session_state.cloudwatch_connector
         )
+    try:
+        st.session_state.cloudwatch_connector = AWSCloudWatchConnector(aws_config)
+        st.session_state.always_on_monitor = AlwaysOnMonitor(st.session_state.cloudwatch_connector)
+        st.session_state.auto_remediation = EnhancedAutoRemediationEngine(st.session_state.cloudwatch_connector)  # ✅ Fixed
+        st.session_state.predictive_analytics = EnhancedPredictiveAnalyticsEngine(st.session_state.cloudwatch_connector)
+    
+    
     
     
 
