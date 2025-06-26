@@ -21,7 +21,7 @@ import re
 import os
 import sys
 
-
+from your_module_name import AWSCloudWatchConnector
 
 # Add this near the top of your existing file (after your imports)
 from enterprise_enhancements import (
