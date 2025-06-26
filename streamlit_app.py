@@ -1120,6 +1120,58 @@ class AWSCloudWatchConnector:
         
         return results
     
+    def test_log_groups(log_groups):
+    """Test access to specified log groups"""
+    if not st.session_state.cloudwatch_connector or st.session_state.cloudwatch_connector.demo_mode:
+        st.warning("AWS connection required for testing")
+        return
+    
+    st.write("🧪 **Testing log group access...**")
+    
+    logs_client = st.session_state.cloudwatch_connector.aws_manager.get_client('logs')
+    if not logs_client:
+        st.error("❌ No CloudWatch Logs client available")
+        return
+    
+    results = []
+    
+    for log_group in log_groups:
+        try:
+            # Test by trying to describe the log group
+            response = logs_client.describe_log_groups(
+                logGroupNamePrefix=log_group,
+                limit=1
+            )
+            
+            found = any(lg['logGroupName'] == log_group for lg in response['logGroups'])
+            
+            if found:
+                try:
+                    logs_client.filter_log_events(
+                        logGroupName=log_group,
+                        limit=1
+                    )
+                    results.append({"log_group": log_group, "status": "✅ OK", "message": "Accessible"})
+                except Exception as read_error:
+                    results.append({"log_group": log_group, "status": "⚠️ Limited", "message": f"Read error: {str(read_error)}"})
+            else:
+                results.append({"log_group": log_group, "status": "❌ Not Found", "message": "Log group does not exist"})
+                
+        except Exception as e:
+            results.append({"log_group": log_group, "status": "❌ Error", "message": str(e)})
+    
+    # Display results
+    for result in results:
+        if result["status"].startswith("✅"):
+            st.success(f'{result["status"]} **{result["log_group"]}** - {result["message"]}')
+        elif result["status"].startswith("⚠️"):
+            st.warning(f'{result["status"]} **{result["log_group"]}** - {result["message"]}')
+        else:
+            st.error(f'{result["status"]} **{result["log_group"]}** - {result["message"]}')
+    
+    
+    
+    
     def _generate_demo_log_data(self) -> List[Dict]:
         """Generate demo log data"""
         log_events = []
@@ -1909,37 +1961,56 @@ AWS_DEFAULT_REGION=us-east-1
                                         help="Environment name (e.g., Production, Staging)")
 
         # CloudWatch Configuration
-        st.subheader("📊 CloudWatch Configuration")
+        # CloudWatch Configuration
+            st.subheader("📊 CloudWatch Configuration")
 
-        st.write("**📝 CloudWatch Log Groups:**")
-        default_log_groups = [
-            "/aws/rds/instance/sql-server-prod-1/error",
-            "/aws/rds/instance/sql-server-prod-1/agent", 
-            "/ec2/sql-server/application",
-            "/ec2/sql-server/system",
-            "/ec2/sql-server/security"
-        ]
+            st.success("✅ **Using your actual CloudWatch log groups!**")
 
-        log_groups = st.text_area(
-            "Log Groups (one per line)",
-            value="\n".join(default_log_groups),
-            height=150,
-            help="Enter CloudWatch log group names, one per line"
-        ).split('\n')
+            st.write("**📝 Your CloudWatch Log Groups:**")
 
-        custom_namespace = st.text_input(
-            "Custom Metrics Namespace", 
-            value="SQLServer/CustomMetrics",
-            help="Namespace for your custom SQL Server metrics"
-        )
+            # Use YOUR EXACT log group names
+            your_actual_log_groups = [
+                "SQLServer/ErrorLogs",
+                "Windows/Application", 
+                "Windows/Security",
+                "Windows/Setup",
+                "Windows/System"
+            ]
 
-        st.write("**🖥️ OS Metrics Configuration:**")
-        enable_os_metrics = st.checkbox("Enable OS-level Metrics", value=True)
-        os_metrics_namespace = st.text_input(
-            "OS Metrics Namespace",
-            value="CWAgent",
-            help="CloudWatch namespace for OS metrics"
-        )
+            # Let user select which ones to monitor
+            selected_log_groups = st.multiselect(
+                "Select Log Groups to Monitor",
+                your_actual_log_groups,
+                default=your_actual_log_groups,  # Select all by default
+                help="These are your actual log groups from CloudWatch"
+            )
+
+            # Option to add custom log groups
+            st.write("**➕ Additional Log Groups (Optional):**")
+            custom_log_groups_text = st.text_area(
+                "Additional log groups (one per line)",
+                value="",
+                height=80,
+                help="Add any other log groups you want to monitor"
+            )
+
+            # Combine selected and custom log groups
+            log_groups = selected_log_groups.copy()
+            if custom_log_groups_text.strip():
+                custom_groups = [lg.strip() for lg in custom_log_groups_text.split('\n') if lg.strip()]
+                log_groups.extend(custom_groups)
+
+            # Show final configuration
+            if log_groups:
+                st.success(f"✅ **{len(log_groups)} log groups configured:**")
+                for lg in log_groups:
+                    st.write(f"  • `{lg}`")
+            else:
+                st.warning("⚠️ No log groups selected")
+
+            # Test log group connectivity
+            if st.button("🧪 Test Log Group Access"):
+                test_log_groups(log_groups)
 
         # Setup Guide
         with st.expander("📋 Setup Guide for Real Data", expanded=False):
@@ -3066,21 +3137,60 @@ def render_predictive_analytics_tab(all_metrics, enable_predictive_alerts):
 # Find the render_alerts_tab function around line 2000 and modify it:
 
 def render_alerts_tab(all_metrics, all_logs):
-    """Render alerts tab"""
+    """Render alerts tab with enhanced log handling"""
     st.header("🚨 Intelligent Alert Management")
     
-    # ... existing code ...
+    # Generate alerts based on metrics
+    current_alerts = []
     
-    # Enhanced logs display - REPLACE THE EXISTING LOG SECTION
+    if all_metrics.get('cpu_usage'):
+        recent_cpu = [dp['Average'] for dp in all_metrics['cpu_usage'][-3:]]
+        if recent_cpu and all(cpu > 85 for cpu in recent_cpu):
+            current_alerts.append({
+                'severity': 'Warning',
+                'message': f'High CPU usage detected: {recent_cpu[-1]:.1f}%',
+                'timestamp': datetime.now()
+            })
+    
+    if all_metrics.get('memory_usage'):
+        recent_memory = [dp['Average'] for dp in all_metrics['memory_usage'][-3:]]
+        if recent_memory and all(mem > 90 for mem in recent_memory):
+            current_alerts.append({
+                'severity': 'Critical',
+                'message': f'Memory pressure detected: {recent_memory[-1]:.1f}%',
+                'timestamp': datetime.now()
+            })
+    
+    # Display current alerts
+    if current_alerts:
+        st.subheader("🚨 Active Alerts")
+        
+        for alert in current_alerts:
+            severity_color = {
+                'Critical': 'alert-critical',
+                'Warning': 'alert-warning',
+                'Info': 'metric-card'
+            }.get(alert['severity'], 'metric-card')
+            
+            st.markdown(f"""
+            <div class="{severity_color}">
+                <strong>🚨 {alert['severity']}: {alert['message']}</strong><br>
+                <small>Time: {alert['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}</small>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.success("🎉 No active alerts - all systems operating normally!")
+    
+    # Enhanced logs display with FIXED error handling
     st.markdown("---")
     st.subheader("📝 CloudWatch Logs Analysis")
     
     # Add time range selector
     col1, col2 = st.columns(2)
     with col1:
-        hours_back = st.selectbox("Time Range", [24, 48, 168, 720, 8760], 
-                                 format_func=lambda x: f"Last {x} hours" if x < 168 else f"Last {x//24} days",
-                                 index=2)  # Default to 7 days
+        hours_back = st.selectbox("Time Range", [1, 6, 24, 48, 168], 
+                                 format_func=lambda x: f"Last {x} hours" if x < 48 else f"Last {x//24} days",
+                                 index=2)  # Default to 24 hours
     
     with col2:
         if st.button("🔄 Refresh Logs"):
@@ -3089,87 +3199,258 @@ def render_alerts_tab(all_metrics, all_logs):
     # Get logs with selected time range
     if st.session_state.cloudwatch_connector:
         aws_config = st.session_state.cloudwatch_connector.aws_config
-        if aws_config.get('log_groups'):
+        configured_log_groups = aws_config.get('log_groups', [])
+        
+        if configured_log_groups:
+            st.info(f"📋 **Configured log groups:** {', '.join(configured_log_groups)}")
+            
             try:
-                # Get logs with custom time range
-                fresh_logs = st.session_state.cloudwatch_connector.get_sql_server_logs(
-                    aws_config['log_groups'], 
-                    hours=hours_back
-                )
+                # Get logs with custom time range and better error handling
+                fresh_logs = {}
+                logs_client = st.session_state.cloudwatch_connector.aws_manager.get_client('logs')
                 
-                if fresh_logs:
-                    # Log group selector
-                    selected_log_group = st.selectbox(
-                        "Select Log Group", 
-                        list(fresh_logs.keys())
-                    )
+                if logs_client and not st.session_state.cloudwatch_connector.demo_mode:
+                    start_time = int((datetime.now() - timedelta(hours=hours_back)).timestamp() * 1000)
+                    end_time = int(datetime.now().timestamp() * 1000)
                     
-                    if selected_log_group and fresh_logs[selected_log_group]:
-                        logs = fresh_logs[selected_log_group]
-                        
-                        st.success(f"✅ Found {len(logs)} log events in {selected_log_group}")
-                        
-                        # Log filters
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            log_level = st.selectbox("Filter by Level", 
-                                                   ["All", "Error", "Warning", "Info"])
-                        with col2:
-                            search_term = st.text_input("Search in logs")
-                        with col3:
-                            max_logs = st.slider("Max logs to display", 10, 100, 20)
-                        
-                        # Filter logs
-                        filtered_logs = logs[:max_logs]
-                        if search_term:
-                            filtered_logs = [log for log in filtered_logs 
-                                           if search_term.lower() in log.get('message', '').lower()]
-                        
-                        # Display logs with better encoding handling
-                        st.subheader(f"📋 Recent Events from {selected_log_group}")
-                        
-                        for i, log in enumerate(filtered_logs):
-                            try:
-                                timestamp = datetime.fromtimestamp(log['timestamp'] / 1000)
-                                message = log.get('message', 'No message')
-                                
-                                # Handle encoding issues
-                                try:
-                                    # Try to decode if it's bytes
-                                    if isinstance(message, bytes):
-                                        message = message.decode('utf-8', errors='replace')
-                                    
-                                    # Clean up message for display
-                                    message = str(message).encode('utf-8', errors='replace').decode('utf-8')
-                                    
-                                except:
-                                    message = "Message contains special characters that cannot be displayed"
-                                
-                                # Display with timestamp
-                                with st.expander(f"🕐 {timestamp.strftime('%Y-%m-%d %H:%M:%S')} - Event {i+1}"):
-                                    st.text(message[:1000])  # Limit message length
-                                    if len(message) > 1000:
-                                        st.info("Message truncated - full message too long")
-                                    
-                                    st.caption(f"Log Stream: {log.get('logStreamName', 'Unknown')}")
-                                
-                            except Exception as e:
-                                st.error(f"Error displaying log event: {str(e)}")
+                    working_log_groups = []
+                    failed_log_groups = []
                     
-                    else:
-                        st.warning(f"No events found in {selected_log_group} for the selected time range")
-                        st.info("Try extending the time range or check if CloudWatch agent is sending logs")
+                    for log_group in configured_log_groups:
+                        try:
+                            st.write(f"📡 **Fetching logs from:** `{log_group}`")
+                            
+                            response = logs_client.filter_log_events(
+                                logGroupName=log_group,
+                                startTime=start_time,
+                                endTime=end_time,
+                                limit=50  # Limit to prevent timeouts
+                            )
+                            
+                            fresh_logs[log_group] = response['events']
+                            working_log_groups.append(log_group)
+                            st.success(f"✅ **{log_group}:** Found {len(response['events'])} events")
+                            
+                        except logs_client.exceptions.ResourceNotFoundException:
+                            failed_log_groups.append((log_group, "Log group does not exist"))
+                            st.error(f"❌ **{log_group}:** Log group not found")
+                        except logs_client.exceptions.InvalidParameterException as e:
+                            failed_log_groups.append((log_group, f"Invalid parameter: {str(e)}"))
+                            st.error(f"❌ **{log_group}:** Invalid parameter: {str(e)}")
+                        except logs_client.exceptions.ServiceUnavailableException:
+                            failed_log_groups.append((log_group, "CloudWatch Logs service unavailable"))
+                            st.error(f"❌ **{log_group}:** Service unavailable")
+                        except Exception as e:
+                            failed_log_groups.append((log_group, str(e)))
+                            st.error(f"❌ **{log_group}:** {str(e)}")
+                    
+                    # Show summary
+                    if working_log_groups:
+                        st.success(f"✅ **Successfully accessed {len(working_log_groups)} log groups**")
+                        with st.expander("✅ Working Log Groups"):
+                            for lg in working_log_groups:
+                                st.write(f"• `{lg}`")
+                    
+                    if failed_log_groups:
+                        st.warning(f"⚠️ **Failed to access {len(failed_log_groups)} log groups**")
+                        with st.expander("❌ Failed Log Groups"):
+                            for log_group, error in failed_log_groups:
+                                st.error(f"**{log_group}:** {error}")
+                                
+                                # Provide specific help for common errors
+                                if "does not exist" in error.lower():
+                                    st.info(f"💡 **Fix:** Check if `{log_group}` exists in CloudWatch Console")
+                                elif "access denied" in error.lower():
+                                    st.info("💡 **Fix:** Add `logs:FilterLogEvents` permission to your IAM policy")
                 
                 else:
-                    st.warning("No log groups returned data")
-                    st.info("Check log group names and IAM permissions")
+                    # Demo mode
+                    fresh_logs = st.session_state.cloudwatch_connector._generate_demo_sql_logs(configured_log_groups)
+                    st.info("🎭 **Demo Mode:** Showing simulated log data")
+                
+                # Display logs if we have any
+                if fresh_logs:
+                    # Log group selector
+                    available_groups = [lg for lg in fresh_logs.keys() if fresh_logs[lg]]
+                    
+                    if available_groups:
+                        selected_log_group = st.selectbox(
+                            "Select Log Group to View", 
+                            available_groups
+                        )
+                        
+                        if selected_log_group and fresh_logs[selected_log_group]:
+                            logs = fresh_logs[selected_log_group]
+                            
+                            st.success(f"✅ **{selected_log_group}:** {len(logs)} events")
+                            
+                            # Log filters
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                search_term = st.text_input("🔍 Search in logs", 
+                                                          placeholder="error, warning, failed")
+                            with col2:
+                                max_logs = st.slider("Max logs to display", 5, 50, 20)
+                            with col3:
+                                sort_order = st.selectbox("Sort", ["Newest First", "Oldest First"])
+                            
+                            # Filter and sort logs
+                            filtered_logs = logs
+                            if search_term:
+                                filtered_logs = [log for log in logs 
+                                               if search_term.lower() in log.get('message', '').lower()]
+                            
+                            # Sort logs
+                            filtered_logs = sorted(filtered_logs, 
+                                                 key=lambda x: x.get('timestamp', 0),
+                                                 reverse=(sort_order == "Newest First"))
+                            
+                            # Limit logs
+                            filtered_logs = filtered_logs[:max_logs]
+                            
+                            # Display logs with better formatting
+                            if filtered_logs:
+                                st.subheader(f"📋 Events from {selected_log_group}")
+                                
+                                for i, log in enumerate(filtered_logs):
+                                    try:
+                                        timestamp = datetime.fromtimestamp(log['timestamp'] / 1000)
+                                        message = log.get('message', 'No message')
+                                        
+                                        # Clean up message for display
+                                        if isinstance(message, bytes):
+                                            message = message.decode('utf-8', errors='replace')
+                                        
+                                        # Truncate very long messages
+                                        display_message = message[:500]
+                                        if len(message) > 500:
+                                            display_message += "... [truncated]"
+                                        
+                                        # Color code based on content
+                                        if any(word in message.lower() for word in ['error', 'failed', 'exception']):
+                                            message_type = "🔴 ERROR"
+                                            container_class = "alert-critical"
+                                        elif any(word in message.lower() for word in ['warning', 'warn']):
+                                            message_type = "🟡 WARNING"
+                                            container_class = "alert-warning"
+                                        else:
+                                            message_type = "ℹ️ INFO"
+                                            container_class = "metric-card"
+                                        
+                                        # Display with timestamp and type
+                                        with st.container():
+                                            st.markdown(f"""
+                                            <div class="{container_class}" style="margin: 0.5rem 0;">
+                                                <strong>{message_type}</strong> - {timestamp.strftime('%Y-%m-%d %H:%M:%S')}<br>
+                                                <small>{display_message}</small>
+                                            </div>
+                                            """, unsafe_allow_html=True)
+                                    
+                                    except Exception as e:
+                                        st.error(f"Error displaying log event {i+1}: {str(e)}")
+                            else:
+                                st.info(f"No events found matching '{search_term}'" if search_term else "No events in selected time range")
+                        
+                        else:
+                            st.warning(f"No events found in {selected_log_group} for the selected time range")
+                    else:
+                        st.warning("No log groups contain events for the selected time range")
+                
+                else:
+                    st.warning("No log data available")
+                    st.info("**Possible reasons:**")
+                    st.write("• Log groups are empty for the selected time range")
+                    st.write("• CloudWatch agent is not sending logs")
+                    st.write("• Insufficient IAM permissions")
                     
             except Exception as e:
-                st.error(f"Error retrieving logs: {str(e)}")
+                st.error(f"❌ **Error retrieving logs:** {str(e)}")
                 st.info("Check your CloudWatch Logs permissions and log group names")
+        
+        else:
+            st.warning("⚠️ **No log groups configured**")
+            st.info("Configure log groups in the sidebar to see log data")
+            
+            # Show help for configuring log groups
+            with st.expander("💡 How to Configure Log Groups"):
+                st.write("1. Go to the sidebar")
+                st.write("2. Scroll to 'CloudWatch Configuration'")
+                st.write("3. Select your actual log groups:")
+                st.code("""
+SQLServer/ErrorLogs
+Windows/Application
+Windows/Security
+Windows/Setup
+Windows/System
+                """)
+                st.write("4. Click 'Test Log Group Access' to verify")
     
     else:
         st.info("Connect to AWS first to see logs")
+        
+        # Show connection instructions
+        with st.expander("🔌 How to Connect to AWS"):
+            st.write("1. Go to the sidebar")
+            st.write("2. Configure your AWS credentials")
+            st.write("3. Click 'Test AWS Connection'")
+            st.write("4. Return to this tab to view logs")
+
+# =================== ALSO ADD: Test Log Groups Function ===================
+def test_log_groups(log_groups):
+    """Test access to specified log groups"""
+    if not st.session_state.cloudwatch_connector or st.session_state.cloudwatch_connector.demo_mode:
+        st.warning("AWS connection required for testing")
+        return
+    
+    st.write("🧪 **Testing log group access...**")
+    
+    logs_client = st.session_state.cloudwatch_connector.aws_manager.get_client('logs')
+    if not logs_client:
+        st.error("❌ No CloudWatch Logs client available")
+        return
+    
+    results = []
+    
+    for log_group in log_groups:
+        try:
+            # Test by trying to describe the log group
+            response = logs_client.describe_log_groups(
+                logGroupNamePrefix=log_group,
+                limit=1
+            )
+            
+            found = any(lg['logGroupName'] == log_group for lg in response['logGroups'])
+            
+            if found:
+                try:
+                    # Test read access
+                    logs_client.filter_log_events(
+                        logGroupName=log_group,
+                        limit=1
+                    )
+                    results.append({"log_group": log_group, "status": "✅ OK", "message": "Accessible"})
+                except Exception as read_error:
+                    results.append({"log_group": log_group, "status": "⚠️ Limited", "message": f"Read error: {str(read_error)}"})
+            else:
+                results.append({"log_group": log_group, "status": "❌ Not Found", "message": "Log group does not exist"})
+                
+        except Exception as e:
+            results.append({"log_group": log_group, "status": "❌ Error", "message": str(e)})
+    
+    # Display results
+    for result in results:
+        if result["status"].startswith("✅"):
+            st.success(f'{result["status"]} **{result["log_group"]}** - {result["message"]}')
+        elif result["status"].startswith("⚠️"):
+            st.warning(f'{result["status"]} **{result["log_group"]}** - {result["message"]}')
+        else:
+            st.error(f'{result["status"]} **{result["log_group"]}** - {result["message"]}')
+            
+            # Provide specific help
+            if "does not exist" in result["message"].lower():
+                st.info(f"💡 **Check:** Does `{result['log_group']}` exist in your CloudWatch Console?")
+            elif "access denied" in result["message"].lower():
+                st.info("💡 **Fix:** Add `logs:FilterLogEvents` and `logs:DescribeLogGroups` to your IAM policy")
 
 def render_performance_tab(all_metrics):
     """Render performance analytics tab"""
