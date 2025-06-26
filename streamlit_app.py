@@ -1149,51 +1149,40 @@ class AWSCloudWatchConnector:
             logger.error(f"Failed to retrieve RDS instances: {str(e)}")
             return []
     
-    def get_ec2_sql_instances(self) -> List[Dict]:
-        """Get EC2 instances running SQL Server"""
-        if self.demo_mode:
-            return [
-                {
-                    'InstanceId': 'i-1234567890abcdef0',
-                    'InstanceType': 'm5.xlarge',
-                    'State': {'Name': 'running'},
-                    'PrivateIpAddress': '10.0.1.100',
-                    'Tags': [{'Key': 'Name', 'Value': 'SQL-Always-On-Primary'}]
-                },
-                {
-                    'InstanceId': 'i-0987654321fedcba0',
-                    'InstanceType': 'm5.xlarge',
-                    'State': {'Name': 'running'},
-                    'PrivateIpAddress': '10.0.1.101',
-                    'Tags': [{'Key': 'Name', 'Value': 'SQL-Always-On-Secondary'}]
-                }
-            ]
-        
-        try:
-            ec2_client = self.aws_manager.get_client('ec2')
-            if not ec2_client:
-                return []
-                
-            response = ec2_client.describe_instances(
-                Filters=[
-                    {
-                        'Name': 'tag:Application',
-                        'Values': ['SQLServer', 'SQL Server', 'Database']
-                    }
-                ]
-            )
-            
-            instances = []
-            for reservation in response['Reservations']:
-                for instance in reservation['Instances']:
-                    if instance['State']['Name'] in ['running', 'stopped']:
-                        instances.append(instance)
-            
-            return instances
-            
-        except Exception as e:
-            logger.error(f"Failed to retrieve EC2 instances: {str(e)}")
+    def get_ec2_sql_instances(self):
+    """Get ALL EC2 instances and let user choose SQL Servers"""
+    
+    if self.demo_mode:
+        return [
+            {
+                'InstanceId': 'i-1234567890abcdef0',
+                'InstanceType': 'm5.xlarge',
+                'State': {'Name': 'running'},
+                'PrivateIpAddress': '10.0.1.100',
+                'Tags': [{'Key': 'Name', 'Value': 'SQL-Server-1'}]
+            }
+        ]
+    
+    try:
+        ec2_client = self.aws_manager.get_client('ec2')
+        if not ec2_client:
             return []
+        
+        # Get ALL instances (no filters)
+        response = ec2_client.describe_instances()
+        
+        all_instances = []
+        for reservation in response['Reservations']:
+            for instance in reservation['Instances']:
+                # Include running and stopped instances
+                if instance['State']['Name'] in ['running', 'stopped']:
+                    all_instances.append(instance)
+        
+        return all_instances
+        
+    except Exception as e:
+        logger.error(f"Failed to retrieve EC2 instances: {str(e)}")
+        return []
     
     def get_cloudwatch_logs(self, log_group: str, hours: int = 24) -> List[Dict]:
         """Get CloudWatch logs"""
@@ -1220,29 +1209,34 @@ class AWSCloudWatchConnector:
             logger.error(f"Failed to retrieve CloudWatch logs: {str(e)}")
             return []
 
-    def get_available_log_groups(self) -> List[str]:
-        """Get all available CloudWatch log groups"""
-        if self.demo_mode:
-            return [
-                "/aws/rds/instance/sql-server-prod-1/error",
-                "/aws/rds/instance/sql-server-prod-1/agent",
-                "/aws/rds/instance/sql-server-prod-2/error", 
-                "/ec2/sql-server/application",
-                "/ec2/sql-server/system",
-                "/ec2/sql-server/security",
-                "/ec2/sql-server/performance"
-            ]
-        
-        try:
-            logs_client = self.aws_manager.get_client('logs')
-            if not logs_client:
-                return []
-                
-            response = logs_client.describe_log_groups()
-            return [lg['logGroupName'] for lg in response['logGroups']]
-        except Exception as e:
-            logger.error(f"Failed to retrieve log groups: {str(e)}")
+    def get_available_log_groups(self):
+    """Get ALL available CloudWatch log groups"""
+    
+    if self.demo_mode:
+        return [
+            "/aws/ec2/windows/application",
+            "/aws/ec2/windows/system", 
+            "/aws/rds/instance/sql-prod/error",
+            "custom-sql-logs"
+        ]
+    
+    try:
+        logs_client = self.aws_manager.get_client('logs')
+        if not logs_client:
             return []
+        
+        # Get all log groups
+        log_groups = []
+        response = logs_client.describe_log_groups()
+        
+        for log_group in response['logGroups']:
+            log_groups.append(log_group['logGroupName'])
+        
+        return sorted(log_groups)
+        
+    except Exception as e:
+        logger.error(f"Failed to get log groups: {str(e)}")
+        return []
 
     def get_os_metrics(self, instance_id: str, start_time: datetime, end_time: datetime) -> Dict[str, List]:
         """Get comprehensive OS-level metrics from CloudWatch Agent"""
@@ -3389,6 +3383,64 @@ def debug_ec2_instances():
 def render_dashboard_tab(all_metrics, ec2_instances, rds_instances):
     """Render the main dashboard tab"""
     st.header("🏢 AWS SQL Server Infrastructure Overview")
+    
+    # ===== NEW INSTANCE SELECTOR - INSERT HERE =====
+    st.subheader("🖥️ Select Instances to Monitor")
+    
+    if ec2_instances:
+        st.success(f"✅ Found {len(ec2_instances)} EC2 instances")
+        
+        selected_instances = []
+        
+        for instance in ec2_instances:
+            instance_id = instance['InstanceId']
+            instance_name = "Unnamed"
+            
+            # Get instance name from tags
+            for tag in instance.get('Tags', []):
+                if tag['Key'] == 'Name':
+                    instance_name = tag['Value']
+                    break
+            
+            # Show instance with checkbox
+            col1, col2, col3 = st.columns([3, 1, 1])
+            
+            with col1:
+                state = instance['State']['Name']
+                state_icon = "🟢" if state == 'running' else "🟡"
+                st.write(f"{state_icon} **{instance_name}** ({instance_id})")
+                st.write(f"Type: {instance['InstanceType']} | State: {state}")
+            
+            with col2:
+                is_selected = st.checkbox("Monitor", key=f"select_{instance_id}")
+            
+            with col3:
+                is_sql = st.checkbox("SQL Server", key=f"sql_{instance_id}")
+            
+            if is_selected:
+                instance['is_sql_server'] = is_sql
+                selected_instances.append(instance)
+        
+        # Store selected instances
+        st.session_state.selected_instances = selected_instances
+        sql_instances = [i for i in selected_instances if i.get('is_sql_server')]
+        
+        if selected_instances:
+            st.success(f"✅ Monitoring {len(selected_instances)} instances ({len(sql_instances)} SQL Servers)")
+    
+    else:
+        st.warning("No EC2 instances found")
+        
+        with st.expander("🔧 Troubleshooting"):
+            st.write("**Possible causes:**")
+            st.write("• Wrong AWS region selected")
+            st.write("• No EC2 instances in your account") 
+            st.write("• Missing IAM permission: ec2:DescribeInstances")
+    
+    st.markdown("---")  # Add separator line
+    # ===== END OF NEW CODE =====
+    
+    
     
     # Enhanced connection status banner for Streamlit Cloud
     if st.session_state.cloudwatch_connector:
