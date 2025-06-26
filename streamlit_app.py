@@ -502,6 +502,8 @@ def get_aws_manager():
     """Get cached AWS manager instance"""
     return StreamlitAWSManager()
 
+# =================== STEP 1: PLACE THIS FUNCTION RIGHT AFTER get_aws_manager() ===================
+
 def test_log_groups(log_groups):
     """Test access to specified log groups"""
     if not st.session_state.cloudwatch_connector or st.session_state.cloudwatch_connector.demo_mode:
@@ -519,7 +521,6 @@ def test_log_groups(log_groups):
     
     for log_group in log_groups:
         try:
-            # Test by trying to describe the log group
             response = logs_client.describe_log_groups(
                 logGroupNamePrefix=log_group,
                 limit=1
@@ -541,6 +542,15 @@ def test_log_groups(log_groups):
                 
         except Exception as e:
             results.append({"log_group": log_group, "status": "❌ Error", "message": str(e)})
+    
+    # Display results
+    for result in results:
+        if result["status"].startswith("✅"):
+            st.success(f'{result["status"]} **{result["log_group"]}** - {result["message"]}')
+        elif result["status"].startswith("⚠️"):
+            st.warning(f'{result["status"]} **{result["log_group"]}** - {result["message"]}')
+        else:
+            st.error(f'{result["status"]} **{result["log_group"]}** - {result["message"]}')
     
    # =================== AWS CloudWatch Integration ===================
 class AWSCloudWatchConnector:
@@ -3397,62 +3407,6 @@ Windows/System
             st.write("3. Click 'Test AWS Connection'")
             st.write("4. Return to this tab to view logs")
 
-# =================== ALSO ADD: Test Log Groups Function ===================
-def test_log_groups(log_groups):
-    """Test access to specified log groups"""
-    if not st.session_state.cloudwatch_connector or st.session_state.cloudwatch_connector.demo_mode:
-        st.warning("AWS connection required for testing")
-        return
-    
-    st.write("🧪 **Testing log group access...**")
-    
-    logs_client = st.session_state.cloudwatch_connector.aws_manager.get_client('logs')
-    if not logs_client:
-        st.error("❌ No CloudWatch Logs client available")
-        return
-    
-    results = []
-    
-    for log_group in log_groups:
-        try:
-            # Test by trying to describe the log group
-            response = logs_client.describe_log_groups(
-                logGroupNamePrefix=log_group,
-                limit=1
-            )
-            
-            found = any(lg['logGroupName'] == log_group for lg in response['logGroups'])
-            
-            if found:
-                try:
-                    # Test read access
-                    logs_client.filter_log_events(
-                        logGroupName=log_group,
-                        limit=1
-                    )
-                    results.append({"log_group": log_group, "status": "✅ OK", "message": "Accessible"})
-                except Exception as read_error:
-                    results.append({"log_group": log_group, "status": "⚠️ Limited", "message": f"Read error: {str(read_error)}"})
-            else:
-                results.append({"log_group": log_group, "status": "❌ Not Found", "message": "Log group does not exist"})
-                
-        except Exception as e:
-            results.append({"log_group": log_group, "status": "❌ Error", "message": str(e)})
-    
-    # Display results
-    for result in results:
-        if result["status"].startswith("✅"):
-            st.success(f'{result["status"]} **{result["log_group"]}** - {result["message"]}')
-        elif result["status"].startswith("⚠️"):
-            st.warning(f'{result["status"]} **{result["log_group"]}** - {result["message"]}')
-        else:
-            st.error(f'{result["status"]} **{result["log_group"]}** - {result["message"]}')
-            
-            # Provide specific help
-            if "does not exist" in result["message"].lower():
-                st.info(f"💡 **Check:** Does `{result['log_group']}` exist in your CloudWatch Console?")
-            elif "access denied" in result["message"].lower():
-                st.info("💡 **Fix:** Add `logs:FilterLogEvents` and `logs:DescribeLogGroups` to your IAM policy")
 
 def render_performance_tab(all_metrics):
     """Render performance analytics tab"""
