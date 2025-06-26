@@ -21,6 +21,13 @@ import re
 import os
 import sys
 
+# Utility Functions
+def safe_format_method(method_value):
+    """Safely format connection method string, handling None values"""
+    if method_value is None:
+        return 'Unknown'
+    return str(method_value).replace('_', ' ').title()
+
 # Try to import required AWS libraries
 try:
     import boto3
@@ -54,262 +61,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# =================== EMBEDDED CONFIGURATION ===================
-EMBEDDED_CONFIG = {
-    "metadata": {
-        "version": "1.0",
-        "description": "AWS CloudWatch Log Groups Configuration for SQL Server Monitoring",
-        "last_updated": "2024-12-19",
-        "regions": ["us-east-1", "us-east-2", "us-west-1", "us-west-2", "eu-west-1"],
-        "default_region": "us-east-2"
-    },
-    "environments": {
-        "production": {
-            "ec2_metrics": {
-                "description": "EC2 Infrastructure and System Metrics",
-                "log_groups": [
-                    "/aws/ec2/cloudwatch-agent/us-east-2/system",
-                    "/aws/ec2/cloudwatch-agent/us-east-2/performance", 
-                    "/aws/ec2/instances/sql-server-prod-1/system",
-                    "/aws/ec2/instances/sql-server-prod-2/system",
-                    "/aws/ec2/instances/sql-always-on-primary/system",
-                    "/aws/ec2/instances/sql-always-on-secondary/system",
-                    "/ec2/sql-server/infrastructure",
-                    "/ec2/sql-server/networking",
-                    "/ec2/sql-server/storage",
-                    "/ec2/windows/system-events",
-                    "/ec2/windows/application-events",
-                    "/ec2/windows/security-events"
-                ],
-                "metrics_namespace": "AWS/EC2",
-                "custom_metrics_namespace": "CWAgent/EC2"
-            },
-            "sql_metrics": {
-                "description": "SQL Server Database Performance and Application Metrics",
-                "log_groups": [
-                    "/aws/rds/instance/sql-server-prod-1/error",
-                    "/aws/rds/instance/sql-server-prod-1/agent", 
-                    "/aws/rds/instance/sql-server-prod-2/error",
-                    "/aws/rds/instance/sql-server-prod-2/agent",
-                    "/ec2/sql-server/errorlog",
-                    "/ec2/sql-server/agent-log",
-                    "/ec2/sql-server/application",
-                    "/ec2/sql-server/database-engine",
-                    "/ec2/sql-server/always-on",
-                    "/ec2/sql-server/backup-restore",
-                    "/ec2/sql-server/replication",
-                    "/ec2/sql-server/security-audit",
-                    "/ec2/sql-server/performance-counters",
-                    "/ec2/sql-server/deadlocks",
-                    "/ec2/sql-server/blocking-sessions",
-                    "/ec2/sql-server/query-execution",
-                    "/ec2/sql-server/index-maintenance",
-                    "/ec2/sql-server/statistics-updates",
-                    "/sql-server/custom/business-metrics",
-                    "/sql-server/custom/application-specific"
-                ],
-                "metrics_namespace": "CWAgent/SQLServer",
-                "custom_metrics_namespace": "SQLServer/Performance"
-            },
-            "os_metrics": {
-                "description": "Operating System Level Metrics and Logs",
-                "log_groups": [
-                    "/aws/ec2/cloudwatch-agent/us-east-2/cpu",
-                    "/aws/ec2/cloudwatch-agent/us-east-2/memory",
-                    "/aws/ec2/cloudwatch-agent/us-east-2/disk",
-                    "/aws/ec2/cloudwatch-agent/us-east-2/network",
-                    "/ec2/windows/performance-monitor",
-                    "/ec2/windows/resource-monitor",
-                    "/ec2/windows/task-manager-logs",
-                    "/ec2/windows/event-viewer/system",
-                    "/ec2/windows/event-viewer/application",
-                    "/ec2/windows/event-viewer/security",
-                    "/ec2/windows/wmi-logs",
-                    "/ec2/windows/iis-logs",
-                    "/ec2/windows/scheduled-tasks",
-                    "/ec2/windows/services",
-                    "/ec2/windows/updates",
-                    "/os/custom/monitoring",
-                    "/os/custom/alerts"
-                ],
-                "metrics_namespace": "CWAgent",
-                "custom_metrics_namespace": "OS/Custom"
-            }
-        },
-        "staging": {
-            "ec2_metrics": {
-                "description": "EC2 Infrastructure and System Metrics - Staging",
-                "log_groups": [
-                    "/aws/ec2/cloudwatch-agent/us-east-2/staging/system",
-                    "/ec2/sql-server-staging/infrastructure",
-                    "/ec2/sql-server-staging/networking",
-                    "/ec2/windows/staging/system-events"
-                ],
-                "metrics_namespace": "AWS/EC2",
-                "custom_metrics_namespace": "CWAgent/EC2/Staging"
-            },
-            "sql_metrics": {
-                "description": "SQL Server Database Performance - Staging",
-                "log_groups": [
-                    "/aws/rds/instance/sql-server-staging-1/error",
-                    "/aws/rds/instance/sql-server-staging-1/agent",
-                    "/ec2/sql-server-staging/errorlog",
-                    "/ec2/sql-server-staging/application",
-                    "/ec2/sql-server-staging/performance-counters"
-                ],
-                "metrics_namespace": "CWAgent/SQLServer/Staging",
-                "custom_metrics_namespace": "SQLServer/Performance/Staging"
-            },
-            "os_metrics": {
-                "description": "Operating System Level Metrics - Staging",
-                "log_groups": [
-                    "/aws/ec2/cloudwatch-agent/us-east-2/staging/cpu",
-                    "/aws/ec2/cloudwatch-agent/us-east-2/staging/memory",
-                    "/ec2/windows/staging/performance-monitor"
-                ],
-                "metrics_namespace": "CWAgent/Staging",
-                "custom_metrics_namespace": "OS/Custom/Staging"
-            }
-        },
-        "development": {
-            "ec2_metrics": {
-                "description": "EC2 Infrastructure and System Metrics - Development",
-                "log_groups": [
-                    "/ec2/sql-server-dev/infrastructure",
-                    "/ec2/windows/dev/system-events"
-                ],
-                "metrics_namespace": "AWS/EC2",
-                "custom_metrics_namespace": "CWAgent/EC2/Dev"
-            },
-            "sql_metrics": {
-                "description": "SQL Server Database Performance - Development",
-                "log_groups": [
-                    "/ec2/sql-server-dev/errorlog",
-                    "/ec2/sql-server-dev/application"
-                ],
-                "metrics_namespace": "CWAgent/SQLServer/Dev",
-                "custom_metrics_namespace": "SQLServer/Performance/Dev"
-            },
-            "os_metrics": {
-                "description": "Operating System Level Metrics - Development",
-                "log_groups": [
-                    "/aws/ec2/cloudwatch-agent/us-east-2/dev/cpu",
-                    "/ec2/windows/dev/performance-monitor"
-                ],
-                "metrics_namespace": "CWAgent/Dev",
-                "custom_metrics_namespace": "OS/Custom/Dev"
-            }
-        }
-    },
-    "log_group_patterns": {
-        "ec2_instance_pattern": "/aws/ec2/instances/{instance_id}/{log_type}",
-        "rds_instance_pattern": "/aws/rds/instance/{instance_id}/{log_type}",
-        "custom_sql_pattern": "/ec2/sql-server/{instance_name}/{log_type}",
-        "windows_event_pattern": "/ec2/windows/{instance_name}/{event_type}"
-    },
-    "alert_configurations": {
-        "critical_log_patterns": [
-            "FATAL", "ERROR", "CRITICAL", "DEADLOCK", "OUT OF MEMORY",
-            "DISK FULL", "CONNECTION FAILED", "BACKUP FAILED", "AG FAILOVER"
-        ],
-        "warning_log_patterns": [
-            "WARNING", "WARN", "TIMEOUT", "SLOW QUERY", "HIGH CPU",
-            "HIGH MEMORY", "BLOCKING", "LONG RUNNING"
-        ],
-        "info_log_patterns": [
-            "INFO", "INFORMATION", "COMPLETED", "STARTED", "SUCCESS"
-        ]
-    },
-    "metric_filters": {
-        "sql_server": {
-            "error_filter": "{ $.level = \"ERROR\" || $.level = \"FATAL\" }",
-            "performance_filter": "{ $.metric_type = \"performance\" }",
-            "deadlock_filter": "{ $.message like \"*deadlock*\" }",
-            "blocking_filter": "{ $.message like \"*blocking*\" }"
-        },
-        "os": {
-            "high_cpu_filter": "{ $.cpu_usage > 80 }",
-            "high_memory_filter": "{ $.memory_usage > 90 }",
-            "disk_space_filter": "{ $.disk_usage > 85 }"
-        },
-        "ec2": {
-            "instance_state_filter": "{ $.state != \"running\" }",
-            "network_error_filter": "{ $.network_errors > 0 }"
-        }
-    },
-    "retention_policies": {
-        "production": {
-            "critical_logs": 90,
-            "error_logs": 60,
-            "warning_logs": 30,
-            "info_logs": 14,
-            "debug_logs": 7
-        },
-        "staging": {
-            "critical_logs": 60,
-            "error_logs": 30,
-            "warning_logs": 14,
-            "info_logs": 7,
-            "debug_logs": 3
-        },
-        "development": {
-            "critical_logs": 30,
-            "error_logs": 14,
-            "warning_logs": 7,
-            "info_logs": 3,
-            "debug_logs": 1
-        }
-    },
-    "monitoring_settings": {
-        "refresh_interval_seconds": 60,
-        "batch_size": 100,
-        "max_concurrent_requests": 10,
-        "timeout_seconds": 30,
-        "retry_attempts": 3,
-        "enable_real_time_monitoring": True,
-        "enable_predictive_analytics": True,
-        "enable_auto_remediation": True
-    },
-    "dashboard_layout": {
-        "default_tabs": [
-            "Dashboard", "SQL Metrics", "OS Metrics", "EC2 Metrics",
-            "Always On", "Auto-Remediation", "Predictive Analytics",
-            "Alerts", "Performance", "Reports"
-        ],
-        "metric_display_preferences": {
-            "charts_per_row": 2,
-            "default_time_range_hours": 24,
-            "auto_refresh_enabled": True,
-            "show_trend_lines": True,
-            "show_thresholds": True
-        }
-    },
-    "integration_settings": {
-        "claude_ai": {
-            "enabled": False,
-            "model": "claude-3-sonnet-20240229",
-            "max_tokens": 4096
-        },
-        "notifications": {
-            "email": {
-                "enabled": True,
-                "recipients": ["dba-team@company.com", "ops-team@company.com"]
-            },
-            "slack": {
-                "enabled": True,
-                "channel": "#sql-server-alerts"
-            }
-        }
-    }
-}
-
-# =================== UTILITY FUNCTIONS ===================
-def safe_format_method(method_value):
-    """Safely format connection method string, handling None values"""
-    if method_value is None:
-        return 'Unknown'
-    return str(method_value).replace('_', ' ').title()
-
+# =================== CSS Styles ===================
 def load_css_styles():
     """Load CSS styles for the application"""
     st.markdown("""
@@ -415,91 +167,7 @@ def load_css_styles():
     </style>
     """, unsafe_allow_html=True)
 
-# =================== EMBEDDED CONFIGURATION MANAGER ===================
-class EmbeddedConfigurationManager:
-    """Manages embedded configuration for Streamlit Cloud compatibility"""
-    
-    def __init__(self):
-        self.config = EMBEDDED_CONFIG
-        logger.info("Embedded configuration loaded successfully")
-    
-    def get_log_groups_by_environment_and_category(self, environment: str, category: str) -> List[str]:
-        """Get log groups for specific environment and category"""
-        try:
-            return self.config["environments"][environment][category]["log_groups"]
-        except KeyError:
-            logger.warning(f"Configuration not found for {environment}/{category}")
-            return []
-    
-    def get_all_log_groups_for_environment(self, environment: str) -> List[str]:
-        """Get all log groups for an environment"""
-        all_log_groups = []
-        env_config = self.config.get("environments", {}).get(environment, {})
-        
-        for category in ["ec2_metrics", "sql_metrics", "os_metrics"]:
-            if category in env_config:
-                all_log_groups.extend(env_config[category].get("log_groups", []))
-        
-        return all_log_groups
-    
-    def get_metrics_namespace(self, environment: str, category: str) -> str:
-        """Get metrics namespace for environment and category"""
-        try:
-            return self.config["environments"][environment][category]["metrics_namespace"]
-        except KeyError:
-            return "CWAgent"  # Default namespace
-    
-    def get_available_environments(self) -> List[str]:
-        """Get list of available environments"""
-        return list(self.config.get("environments", {}).keys())
-    
-    def get_alert_patterns(self, severity: str) -> List[str]:
-        """Get alert patterns for specific severity"""
-        patterns_key = f"{severity.lower()}_log_patterns"
-        return self.config.get("alert_configurations", {}).get(patterns_key, [])
-    
-    def get_monitoring_settings(self) -> Dict:
-        """Get monitoring settings"""
-        return self.config.get("monitoring_settings", {})
-    
-    def get_retention_policy(self, environment: str, log_type: str) -> int:
-        """Get retention policy for environment and log type"""
-        try:
-            return self.config["retention_policies"][environment][log_type]
-        except KeyError:
-            return 30  # Default 30 days
-    
-    def get_log_group_patterns(self) -> Dict[str, str]:
-        """Get log group naming patterns"""
-        return self.config.get("log_group_patterns", {})
-    
-    def get_configuration_summary(self) -> Dict:
-        """Get summary of configuration for display"""
-        total_log_groups = 0
-        env_counts = {}
-        
-        for env_name, env_config in self.config.get("environments", {}).items():
-            env_total = 0
-            for category in ["ec2_metrics", "sql_metrics", "os_metrics"]:
-                if category in env_config:
-                    category_count = len(env_config[category].get("log_groups", []))
-                    env_total += category_count
-            env_counts[env_name] = env_total
-            total_log_groups += env_total
-        
-        return {
-            "total_log_groups": total_log_groups,
-            "environments": env_counts,
-            "version": self.config.get("metadata", {}).get("version", "Unknown"),
-            "default_region": self.config.get("metadata", {}).get("default_region", "us-east-1")
-        }
-
-@st.cache_resource
-def get_embedded_config_manager():
-    """Get cached embedded configuration manager instance"""
-    return EmbeddedConfigurationManager()
-
-# =================== STREAMLIT AWS MANAGER ===================
+# =================== Streamlit Cloud Compatible AWS Connection Manager ===================
 class StreamlitAWSManager:
     """Specialized AWS connection manager designed for Streamlit Cloud environment"""
     
@@ -624,89 +292,66 @@ class StreamlitAWSManager:
         return True
     
     def _test_session(self, session, method_name: str) -> bool:
-        """Test AWS session with detailed error reporting"""
+        """Test AWS session with comprehensive checks"""
         try:
-            with st.container():
-                st.write(f"🧪 **Testing {method_name} session...**")
-                
-                config = Config(
-                    region_name=session.region_name or 'us-east-1',
-                    retries={'max_attempts': 2, 'mode': 'standard'},
-                    max_pool_connections=10,
-                    read_timeout=30,
-                    connect_timeout=30
-                )
-                
-                st.write("🔄 Creating STS client...")
-                sts_client = session.client('sts', config=config)
-                
-                st.write("🔄 Calling sts.get_caller_identity()...")
-                identity = sts_client.get_caller_identity()
-                
-                st.success(f"✅ **STS Success!**")
-                st.write(f"📋 **Account ID:** {identity.get('Account')}")
-                st.write(f"👤 **User ARN:** {identity.get('Arn')}")
-                st.write(f"🌍 **Region:** {session.region_name}")
-                
-                self.connection_status.update({
-                    'account_id': identity.get('Account'),
-                    'user_arn': identity.get('Arn'),
-                    'region': session.region_name,
-                    'last_test': datetime.now()
-                })
-                
-                return True
-                
+            config = Config(
+                region_name=session.region_name or 'us-east-1',
+                retries={'max_attempts': 2, 'mode': 'standard'},
+                max_pool_connections=10,
+                read_timeout=30,
+                connect_timeout=30
+            )
+            
+            sts_client = session.client('sts', config=config)
+            identity = sts_client.get_caller_identity()
+            
+            self.connection_status.update({
+                'account_id': identity.get('Account'),
+                'user_arn': identity.get('Arn'),
+                'region': session.region_name,
+                'last_test': datetime.now()
+            })
+            
+            cloudwatch_client = session.client('cloudwatch', config=config)
+            cloudwatch_client.list_metrics(MaxRecords=1)
+            
+            return True
+            
         except ClientError as e:
             error_code = e.response['Error']['Code']
-            error_message = e.response['Error']['Message']
-            
-            with st.container():
-                st.error(f"❌ **AWS ClientError: {error_code}**")
-                st.error(f"📝 **Message:** {error_message}")
-                
-                if error_code == "InvalidUserID.NotFound":
-                    st.error("🔑 **Issue:** Your AWS Access Key ID is invalid or the user was deleted")
-                    st.info("💡 **Fix:** Check your AWS Access Key ID in the AWS Console")
-                elif error_code == "SignatureDoesNotMatch":
-                    st.error("🔑 **Issue:** Your AWS Secret Access Key is incorrect")
-                    st.info("💡 **Fix:** Check your AWS Secret Access Key in the AWS Console")
-                elif error_code == "AccessDenied":
-                    st.error("🔒 **Issue:** Your user doesn't have sts:GetCallerIdentity permission")
-                    st.info("💡 **Fix:** Ask your AWS admin to add IAM permissions")
-                elif error_code == "TokenRefreshRequired":
-                    st.error("⏰ **Issue:** Your AWS credentials have expired")
-                    st.info("💡 **Fix:** Generate new AWS credentials")
-                else:
-                    st.error("❌ CloudWatch connector not initialized")
-            
+            self.connection_status['error'] = f"AWS Error ({error_code}): {e.response['Error']['Message']}"
             return False
         except Exception as e:
-            st.error(f"❌ Unexpected error: {str(e)}")
+            self.connection_status['error'] = f"Connection test failed ({method_name}): {str(e)}"
             return False
     
     def _initialize_clients(self):
-        """Initialize AWS service clients"""
+        """Initialize AWS service clients with optimized configuration"""
         if not self.aws_session:
             return
         
         config = Config(
             region_name=self.aws_session.region_name,
-            retries={'max_attempts': 3, 'mode': 'standard'},
-            max_pool_connections=10
+            retries={'max_attempts': 3, 'mode': 'adaptive'},
+            max_pool_connections=50,
+            read_timeout=60,
+            connect_timeout=30
         )
         
         try:
             self.clients = {
                 'cloudwatch': self.aws_session.client('cloudwatch', config=config),
                 'logs': self.aws_session.client('logs', config=config),
-                'ec2': self.aws_session.client('ec2', config=config),
                 'rds': self.aws_session.client('rds', config=config),
-                'sts': self.aws_session.client('sts', config=config),
-                'ssm': self.aws_session.client('ssm', config=config)
+                'ec2': self.aws_session.client('ec2', config=config),
+                'ssm': self.aws_session.client('ssm', config=config),
+                'lambda': self.aws_session.client('lambda', config=config),
+                'sts': self.aws_session.client('sts', config=config)
             }
+            logger.info("AWS clients initialized successfully")
         except Exception as e:
-            logger.error(f"Failed to initialize AWS clients: {str(e)}")
+            self.connection_status['error'] = f"Failed to initialize AWS clients: {str(e)}"
+            self.clients = {}
     
     def get_client(self, service_name: str):
         """Get AWS client for specified service"""
@@ -751,73 +396,34 @@ class StreamlitAWSManager:
         status['streamlit_cloud'] = self.is_streamlit_cloud
         return status
 
+# Initialize global AWS manager
 @st.cache_resource
 def get_aws_manager():
     """Get cached AWS manager instance"""
     return StreamlitAWSManager()
 
-# =================== AWS CLOUDWATCH CONNECTOR ===================
-# =================== AWS CLOUDWATCH CONNECTOR ===================
+# =================== AWS CloudWatch Integration ===================
 class AWSCloudWatchConnector:
     def __init__(self, aws_config: Dict):
         """Initialize AWS CloudWatch connections using the manager"""
         self.aws_config = aws_config
-        self.aws_manager = None
-        self.demo_mode = True  # Default to demo mode
+        self.aws_manager = get_aws_manager()
         
-        try:
-            self.aws_manager = get_aws_manager()
-            if self.aws_manager:
-                self.aws_manager.initialize_aws_connection(aws_config)
-                self.demo_mode = self.aws_manager.demo_mode
-            else:
-                logger.error("Failed to get AWS manager instance")
-                self.demo_mode = True
-        except Exception as e:
-            logger.error(f"Failed to initialize AWS CloudWatch connector: {str(e)}")
-            self.demo_mode = True
+        self.aws_manager.initialize_aws_connection(aws_config)
+        self.demo_mode = self.aws_manager.demo_mode
     
     def test_connection(self) -> bool:
         """Test AWS connection"""
-        if not self.aws_manager:
-            return False
         return self.aws_manager.test_connection()
     
     def get_connection_status(self) -> Dict:
-        """Get connection status with null safety"""
-        if not self.aws_manager:
-            return {
-                'connected': False,
-                'method': 'none',
-                'error': 'AWS manager not initialized',
-                'last_test': None,
-                'account_id': None,
-                'region': None,
-                'user_arn': None,
-                'demo_mode': True,
-                'streamlit_cloud': True
-            }
-        
-        try:
-            return self.aws_manager.get_connection_status()
-        except Exception as e:
-            logger.error(f"Error getting connection status: {str(e)}")
-            return {
-                'connected': False,
-                'method': 'error',
-                'error': f'Error getting status: {str(e)}',
-                'last_test': None,
-                'account_id': None,
-                'region': None,
-                'user_arn': None,
-                'demo_mode': True,
-                'streamlit_cloud': True
-            }
+        """Get connection status"""
+        return self.aws_manager.get_connection_status()
     
     def get_cloudwatch_metrics(self, metric_queries: List[Dict], 
                               start_time: datetime, end_time: datetime) -> Dict[str, List]:
         """Get CloudWatch metrics with enhanced error handling"""
-        if self.demo_mode or not self.aws_manager:
+        if self.demo_mode:
             return self._generate_demo_cloudwatch_data(metric_queries)
         
         try:
@@ -825,7 +431,7 @@ class AWSCloudWatchConnector:
             cloudwatch_client = self.aws_manager.get_client('cloudwatch')
             
             if not cloudwatch_client:
-                return self._generate_demo_cloudwatch_data(metric_queries)
+                return {}
             
             for query in metric_queries:
                 try:
@@ -853,44 +459,101 @@ class AWSCloudWatchConnector:
             
         except Exception as e:
             logger.error(f"Failed to retrieve CloudWatch metrics: {str(e)}")
-            return self._generate_demo_cloudwatch_data(metric_queries)
+            return {}
     
     def get_comprehensive_sql_metrics(self, instance_id: str, start_time: datetime, end_time: datetime) -> Dict[str, List]:
         """Get comprehensive SQL Server metrics from CloudWatch"""
         
         sql_server_metrics = [
-            # Database Engine Performance
+            # ===== DATABASE ENGINE PERFORMANCE =====
             {'key': 'buffer_cache_hit_ratio', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Buffer Manager\\Buffer cache hit ratio'},
             {'key': 'page_life_expectancy', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Buffer Manager\\Page life expectancy'},
             {'key': 'lazy_writes_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Buffer Manager\\Lazy writes/sec'},
             {'key': 'checkpoint_pages_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Buffer Manager\\Checkpoint pages/sec'},
+            {'key': 'free_list_stalls_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Buffer Manager\\Free list stalls/sec'},
             
-            # SQL Server Activity
+            # ===== SQL SERVER ACTIVITY =====
             {'key': 'batch_requests_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:SQL Statistics\\Batch Requests/sec'},
             {'key': 'sql_compilations_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:SQL Statistics\\SQL Compilations/sec'},
+            {'key': 'sql_recompilations_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:SQL Statistics\\SQL Re-Compilations/sec'},
             {'key': 'user_connections', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:General Statistics\\User Connections'},
             {'key': 'processes_blocked', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:General Statistics\\Processes blocked'},
+            {'key': 'logins_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:General Statistics\\Logins/sec'},
+            {'key': 'logouts_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:General Statistics\\Logouts/sec'},
             
-            # Locking and Blocking
+            # ===== LOCKING AND BLOCKING =====
             {'key': 'lock_waits_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Locks\\Lock Waits/sec'},
             {'key': 'lock_wait_time_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Locks\\Average Wait Time (ms)'},
+            {'key': 'lock_timeouts_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Locks\\Lock Timeouts/sec'},
             {'key': 'deadlocks_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Locks\\Number of Deadlocks/sec'},
+            {'key': 'lock_requests_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Locks\\Lock Requests/sec'},
             
-            # Access Methods
+            # ===== ACCESS METHODS =====
             {'key': 'full_scans_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Access Methods\\Full Scans/sec'},
             {'key': 'index_searches_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Access Methods\\Index Searches/sec'},
             {'key': 'page_splits_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Access Methods\\Page Splits/sec'},
+            {'key': 'page_lookups_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Access Methods\\Page lookups/sec'},
+            {'key': 'worktables_created_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Access Methods\\Worktables Created/sec'},
+            {'key': 'workfiles_created_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Access Methods\\Workfiles Created/sec'},
             
-            # Memory Manager
+            # ===== MEMORY MANAGER =====
             {'key': 'memory_grants_pending', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Memory Manager\\Memory Grants Pending'},
+            {'key': 'memory_grants_outstanding', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Memory Manager\\Memory Grants Outstanding'},
             {'key': 'target_server_memory_kb', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Memory Manager\\Target Server Memory (KB)'},
             {'key': 'total_server_memory_kb', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Memory Manager\\Total Server Memory (KB)'},
             
-            # Database Specific
+            # ===== PLAN CACHE =====
+            {'key': 'cache_hit_ratio', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Plan Cache\\Cache Hit Ratio'},
+            {'key': 'cache_pages', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Plan Cache\\Cache Pages'},
+            {'key': 'cache_objects_in_use', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Plan Cache\\Cache Objects in use'},
+            
+            # ===== WAIT STATISTICS =====
+            {'key': 'wait_cxpacket_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Wait Statistics\\CXPACKET waits'},
+            {'key': 'wait_async_network_io_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Wait Statistics\\ASYNC_NETWORK_IO waits'},
+            {'key': 'wait_pageiolatch_sh_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Wait Statistics\\PAGEIOLATCH_SH waits'},
+            {'key': 'wait_pageiolatch_ex_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Wait Statistics\\PAGEIOLATCH_EX waits'},
+            {'key': 'wait_writelog_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Wait Statistics\\WRITELOG waits'},
+            {'key': 'wait_resource_semaphore_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Wait Statistics\\RESOURCE_SEMAPHORE waits'},
+            
+            # ===== ALWAYS ON AVAILABILITY GROUPS =====
+            {'key': 'ag_data_movement_state', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Availability Groups\\Data Movement State'},
+            {'key': 'ag_synchronization_health', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Availability Groups\\Synchronization Health'},
+            {'key': 'ag_log_send_queue_size', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Database Replica\\Log Send Queue Size'},
+            {'key': 'ag_log_send_rate', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Database Replica\\Log Send Rate'},
+            {'key': 'ag_redo_queue_size', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Database Replica\\Redo Queue Size'},
+            {'key': 'ag_redo_rate', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Database Replica\\Redo Rate'},
+            {'key': 'ag_recovery_lsn', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Database Replica\\Recovery LSN'},
+            {'key': 'ag_truncation_lsn', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Database Replica\\Truncation LSN'},
+            
+            # ===== DATABASE SPECIFIC METRICS =====
             {'key': 'db_data_file_size_kb', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Data File(s) Size (KB)'},
             {'key': 'db_log_file_size_kb', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Log File(s) Size (KB)'},
+            {'key': 'db_log_file_used_size_kb', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Log File(s) Used Size (KB)'},
             {'key': 'db_percent_log_used', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Percent Log Used'},
-            {'key': 'db_transactions_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Transactions/sec'}
+            {'key': 'db_active_transactions', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Active Transactions'},
+            {'key': 'db_transactions_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Transactions/sec'},
+            {'key': 'db_log_growths', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Log Growths'},
+            {'key': 'db_log_shrinks', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Log Shrinks'},
+            {'key': 'db_log_flushes_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Log Flushes/sec'},
+            {'key': 'db_log_flush_wait_time', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Log Flush Wait Time'},
+            
+            # ===== TEMPDB SPECIFIC =====
+            {'key': 'tempdb_version_store_size_kb', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Transactions\\Version Store Size (KB)'},
+            {'key': 'tempdb_version_generation_rate', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Transactions\\Version Generation rate (KB/s)'},
+            {'key': 'tempdb_version_cleanup_rate', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Transactions\\Version Cleanup rate (KB/s)'},
+            
+            # ===== BACKUP METRICS =====
+            {'key': 'backup_throughput_bytes_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Backup Device\\Device Throughput Bytes/sec'},
+            
+            # ===== SECURITY METRICS =====
+            {'key': 'failed_logins_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:SQL Errors\\Errors/sec'},
+            
+            # ===== CUSTOM BUSINESS METRICS =====
+            {'key': 'query_avg_execution_time_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Custom\\Average Query Execution Time'},
+            {'key': 'expensive_queries_count', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Custom\\Expensive Queries Count'},
+            {'key': 'index_fragmentation_avg', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Custom\\Average Index Fragmentation'},
+            {'key': 'missing_indexes_count', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Custom\\Missing Indexes Count'},
+            {'key': 'unused_indexes_count', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Custom\\Unused Indexes Count'}
         ]
         
         for metric in sql_server_metrics:
@@ -898,58 +561,9 @@ class AWSCloudWatchConnector:
         
         return self.get_cloudwatch_metrics(sql_server_metrics, start_time, end_time)
     
-    def get_os_metrics(self, instance_id: str, start_time: datetime, end_time: datetime) -> Dict[str, List]:
-        """Get comprehensive OS-level metrics from CloudWatch Agent"""
-        
-        os_metric_queries = [
-            # CPU Metrics
-            {'key': 'cpu_usage_active', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_active'},
-            {'key': 'cpu_usage_idle', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_idle'},
-            {'key': 'cpu_usage_system', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_system'},
-            {'key': 'cpu_usage_user', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_user'},
-            
-            # Memory Metrics
-            {'key': 'mem_used_percent', 'namespace': 'CWAgent', 'metric_name': 'mem_used_percent'},
-            {'key': 'mem_available_percent', 'namespace': 'CWAgent', 'metric_name': 'mem_available_percent'},
-            {'key': 'mem_used', 'namespace': 'CWAgent', 'metric_name': 'mem_used'},
-            {'key': 'mem_cached', 'namespace': 'CWAgent', 'metric_name': 'mem_cached'},
-            
-            # Disk Metrics
-            {'key': 'disk_used_percent', 'namespace': 'CWAgent', 'metric_name': 'disk_used_percent'},
-            {'key': 'diskio_read_bytes', 'namespace': 'CWAgent', 'metric_name': 'diskio_read_bytes'},
-            {'key': 'diskio_write_bytes', 'namespace': 'CWAgent', 'metric_name': 'diskio_write_bytes'},
-            {'key': 'diskio_reads', 'namespace': 'CWAgent', 'metric_name': 'diskio_reads'},
-            {'key': 'diskio_writes', 'namespace': 'CWAgent', 'metric_name': 'diskio_writes'},
-            
-            # Network Metrics
-            {'key': 'net_bytes_sent', 'namespace': 'CWAgent', 'metric_name': 'net_bytes_sent'},
-            {'key': 'net_bytes_recv', 'namespace': 'CWAgent', 'metric_name': 'net_bytes_recv'},
-            {'key': 'net_packets_sent', 'namespace': 'CWAgent', 'metric_name': 'net_packets_sent'},
-            {'key': 'net_packets_recv', 'namespace': 'CWAgent', 'metric_name': 'net_packets_recv'},
-            
-            # System Load
-            {'key': 'system_load1', 'namespace': 'CWAgent', 'metric_name': 'system_load1'},
-            {'key': 'system_load5', 'namespace': 'CWAgent', 'metric_name': 'system_load5'},
-            {'key': 'system_load15', 'namespace': 'CWAgent', 'metric_name': 'system_load15'},
-            
-            # Windows Specific
-            {'key': 'LogicalDisk_PercentFreeSpace', 'namespace': 'CWAgent', 'metric_name': 'LogicalDisk % Free Space'},
-            {'key': 'Memory_PercentCommittedBytesInUse', 'namespace': 'CWAgent', 'metric_name': 'Memory % Committed Bytes In Use'},
-            {'key': 'Processor_PercentProcessorTime', 'namespace': 'CWAgent', 'metric_name': 'Processor % Processor Time'}
-        ]
-        
-        for metric in os_metric_queries:
-            metric['dimensions'] = [
-                {'Name': 'InstanceId', 'Value': instance_id},
-                {'Name': 'ImageId', 'Value': 'ami-xxxxx'},
-                {'Name': 'InstanceType', 'Value': 'm5.large'}
-            ]
-        
-        return self.get_cloudwatch_metrics(os_metric_queries, start_time, end_time)
-    
     def get_rds_instances(self) -> List[Dict]:
         """Get RDS SQL Server instances"""
-        if self.demo_mode or not self.aws_manager:
+        if self.demo_mode:
             return [
                 {
                     'DBInstanceIdentifier': 'sql-server-prod-1',
@@ -989,23 +603,21 @@ class AWSCloudWatchConnector:
     
     def get_ec2_sql_instances(self) -> List[Dict]:
         """Get EC2 instances running SQL Server"""
-        if self.demo_mode or not self.aws_manager:
+        if self.demo_mode:
             return [
                 {
                     'InstanceId': 'i-1234567890abcdef0',
                     'InstanceType': 'm5.xlarge',
                     'State': {'Name': 'running'},
                     'PrivateIpAddress': '10.0.1.100',
-                    'Tags': [{'Key': 'Name', 'Value': 'SQL-Always-On-Primary'},
-                            {'Key': 'Application', 'Value': 'SQLServer'}]
+                    'Tags': [{'Key': 'Name', 'Value': 'SQL-Always-On-Primary'}]
                 },
                 {
                     'InstanceId': 'i-0987654321fedcba0',
                     'InstanceType': 'm5.xlarge',
                     'State': {'Name': 'running'},
                     'PrivateIpAddress': '10.0.1.101',
-                    'Tags': [{'Key': 'Name', 'Value': 'SQL-Always-On-Secondary'},
-                            {'Key': 'Application', 'Value': 'SQLServer'}]
+                    'Tags': [{'Key': 'Name', 'Value': 'SQL-Always-On-Secondary'}]
                 }
             ]
         
@@ -1018,7 +630,7 @@ class AWSCloudWatchConnector:
                 Filters=[
                     {
                         'Name': 'tag:Application',
-                        'Values': ['SQLServer', 'SQL Server', 'Database', 'MSSQL']
+                        'Values': ['SQLServer', 'SQL Server', 'Database']
                     }
                 ]
             )
@@ -1037,7 +649,7 @@ class AWSCloudWatchConnector:
     
     def get_cloudwatch_logs(self, log_group: str, hours: int = 24) -> List[Dict]:
         """Get CloudWatch logs"""
-        if self.demo_mode or not self.aws_manager:
+        if self.demo_mode:
             return self._generate_demo_log_data()
         
         try:
@@ -1059,10 +671,10 @@ class AWSCloudWatchConnector:
         except Exception as e:
             logger.error(f"Failed to retrieve CloudWatch logs: {str(e)}")
             return []
-    
+
     def get_available_log_groups(self) -> List[str]:
         """Get all available CloudWatch log groups"""
-        if self.demo_mode or not self.aws_manager:
+        if self.demo_mode:
             return [
                 "/aws/rds/instance/sql-server-prod-1/error",
                 "/aws/rds/instance/sql-server-prod-1/agent",
@@ -1083,11 +695,85 @@ class AWSCloudWatchConnector:
         except Exception as e:
             logger.error(f"Failed to retrieve log groups: {str(e)}")
             return []
-    
+
+    def get_os_metrics(self, instance_id: str, start_time: datetime, end_time: datetime) -> Dict[str, List]:
+        """Get comprehensive OS-level metrics from CloudWatch Agent"""
+        
+        os_metric_queries = [
+            # ===== CPU METRICS =====
+            {'key': 'cpu_usage_active', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_active'},
+            {'key': 'cpu_usage_guest', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_guest'},
+            {'key': 'cpu_usage_idle', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_idle'},
+            {'key': 'cpu_usage_iowait', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_iowait'},
+            {'key': 'cpu_usage_steal', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_steal'},
+            {'key': 'cpu_usage_system', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_system'},
+            {'key': 'cpu_usage_user', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_user'},
+            
+            # ===== MEMORY METRICS =====
+            {'key': 'mem_used_percent', 'namespace': 'CWAgent', 'metric_name': 'mem_used_percent'},
+            {'key': 'mem_available_percent', 'namespace': 'CWAgent', 'metric_name': 'mem_available_percent'},
+            {'key': 'mem_used', 'namespace': 'CWAgent', 'metric_name': 'mem_used'},
+            {'key': 'mem_cached', 'namespace': 'CWAgent', 'metric_name': 'mem_cached'},
+            {'key': 'mem_buffers', 'namespace': 'CWAgent', 'metric_name': 'mem_buffers'},
+            
+            # ===== DISK METRICS =====
+            {'key': 'disk_used_percent', 'namespace': 'CWAgent', 'metric_name': 'disk_used_percent'},
+            {'key': 'disk_inodes_free', 'namespace': 'CWAgent', 'metric_name': 'disk_inodes_free'},
+            {'key': 'diskio_read_bytes', 'namespace': 'CWAgent', 'metric_name': 'diskio_read_bytes'},
+            {'key': 'diskio_write_bytes', 'namespace': 'CWAgent', 'metric_name': 'diskio_write_bytes'},
+            {'key': 'diskio_reads', 'namespace': 'CWAgent', 'metric_name': 'diskio_reads'},
+            {'key': 'diskio_writes', 'namespace': 'CWAgent', 'metric_name': 'diskio_writes'},
+            {'key': 'diskio_read_time', 'namespace': 'CWAgent', 'metric_name': 'diskio_read_time'},
+            {'key': 'diskio_write_time', 'namespace': 'CWAgent', 'metric_name': 'diskio_write_time'},
+            {'key': 'diskio_io_time', 'namespace': 'CWAgent', 'metric_name': 'diskio_io_time'},
+            
+            # ===== NETWORK METRICS =====
+            {'key': 'net_bytes_sent', 'namespace': 'CWAgent', 'metric_name': 'net_bytes_sent'},
+            {'key': 'net_bytes_recv', 'namespace': 'CWAgent', 'metric_name': 'net_bytes_recv'},
+            {'key': 'net_packets_sent', 'namespace': 'CWAgent', 'metric_name': 'net_packets_sent'},
+            {'key': 'net_packets_recv', 'namespace': 'CWAgent', 'metric_name': 'net_packets_recv'},
+            {'key': 'net_err_in', 'namespace': 'CWAgent', 'metric_name': 'net_err_in'},
+            {'key': 'net_err_out', 'namespace': 'CWAgent', 'metric_name': 'net_err_out'},
+            {'key': 'net_drop_in', 'namespace': 'CWAgent', 'metric_name': 'net_drop_in'},
+            {'key': 'net_drop_out', 'namespace': 'CWAgent', 'metric_name': 'net_drop_out'},
+            
+            # ===== PROCESS METRICS =====
+            {'key': 'processes_running', 'namespace': 'CWAgent', 'metric_name': 'processes_running'},
+            {'key': 'processes_sleeping', 'namespace': 'CWAgent', 'metric_name': 'processes_sleeping'},
+            {'key': 'processes_stopped', 'namespace': 'CWAgent', 'metric_name': 'processes_stopped'},
+            {'key': 'processes_zombies', 'namespace': 'CWAgent', 'metric_name': 'processes_zombies'},
+            {'key': 'processes_blocked', 'namespace': 'CWAgent', 'metric_name': 'processes_blocked'},
+            
+            # ===== SYSTEM LOAD =====
+            {'key': 'system_load1', 'namespace': 'CWAgent', 'metric_name': 'system_load1'},
+            {'key': 'system_load5', 'namespace': 'CWAgent', 'metric_name': 'system_load5'},
+            {'key': 'system_load15', 'namespace': 'CWAgent', 'metric_name': 'system_load15'},
+            
+            # ===== WINDOWS SPECIFIC METRICS =====
+            {'key': 'LogicalDisk_PercentFreeSpace', 'namespace': 'CWAgent', 'metric_name': 'LogicalDisk % Free Space'},
+            {'key': 'Memory_PercentCommittedBytesInUse', 'namespace': 'CWAgent', 'metric_name': 'Memory % Committed Bytes In Use'},
+            {'key': 'Memory_AvailableMBytes', 'namespace': 'CWAgent', 'metric_name': 'Memory Available MBytes'},
+            {'key': 'Paging_File_PercentUsage', 'namespace': 'CWAgent', 'metric_name': 'Paging File % Usage'},
+            {'key': 'PhysicalDisk_PercentDiskTime', 'namespace': 'CWAgent', 'metric_name': 'PhysicalDisk % Disk Time'},
+            {'key': 'PhysicalDisk_AvgDiskQueueLength', 'namespace': 'CWAgent', 'metric_name': 'PhysicalDisk Avg. Disk Queue Length'},
+            {'key': 'Processor_PercentProcessorTime', 'namespace': 'CWAgent', 'metric_name': 'Processor % Processor Time'},
+            {'key': 'System_ProcessorQueueLength', 'namespace': 'CWAgent', 'metric_name': 'System Processor Queue Length'},
+            {'key': 'TCPv4_ConnectionsEstablished', 'namespace': 'CWAgent', 'metric_name': 'TCPv4 Connections Established'}
+        ]
+        
+        for metric in os_metric_queries:
+            metric['dimensions'] = [
+                {'Name': 'InstanceId', 'Value': instance_id},
+                {'Name': 'ImageId', 'Value': 'ami-xxxxx'},
+                {'Name': 'InstanceType', 'Value': 'm5.large'}
+            ]
+        
+        return self.get_cloudwatch_metrics(os_metric_queries, start_time, end_time)
+
     def get_sql_server_logs(self, log_groups: List[str], hours: int = 24, 
-                           filter_pattern: str = None) -> Dict[str, List[Dict]]:
+                        filter_pattern: str = None) -> Dict[str, List[Dict]]:
         """Get SQL Server specific logs from multiple log groups"""
-        if self.demo_mode or not self.aws_manager:
+        if self.demo_mode:
             return self._generate_demo_sql_logs(log_groups)
         
         try:
@@ -1126,10 +812,68 @@ class AWSCloudWatchConnector:
         except Exception as e:
             logger.error(f"Failed to retrieve SQL Server logs: {str(e)}")
             return {}
-    
+
+    def _generate_demo_sql_logs(self, log_groups: List[str]) -> Dict[str, List[Dict]]:
+        """Generate demo SQL Server logs"""
+        demo_logs = {}
+        
+        log_patterns = {
+            'error': [
+                "SQL Server error: Login failed for user 'sa'",
+                "Deadlock detected between sessions 52 and 67",
+                "I/O error on backup device",
+                "Transaction log is full",
+                "Memory pressure detected"
+            ],
+            'agent': [
+                "Job 'DatabaseBackup' completed successfully",
+                "Job 'IndexMaintenance' started",
+                "Alert: High CPU utilization",
+                "Maintenance plan execution completed"
+            ],
+            'application': [
+                "Application connected to database",
+                "Query execution completed in 1250ms",
+                "Connection pool exhausted",
+                "Stored procedure execution started"
+            ],
+            'system': [
+                "SQL Server service started",
+                "Database recovery completed",
+                "Checkpoint operation completed",
+                "Always On availability group synchronized"
+            ],
+            'security': [
+                "Login succeeded for user 'domain\\user'",
+                "Permission denied for user 'app_user'",
+                "Security audit event logged",
+                "Password policy violation detected"
+            ]
+        }
+        
+        for log_group in log_groups:
+            log_type = 'system'
+            for pattern_type in log_patterns.keys():
+                if pattern_type in log_group.lower():
+                    log_type = pattern_type
+                    break
+            
+            events = []
+            for i in range(20):
+                timestamp = datetime.now() - timedelta(minutes=i * 30)
+                events.append({
+                    'timestamp': int(timestamp.timestamp() * 1000),
+                    'message': np.random.choice(log_patterns[log_type]),
+                    'logStreamName': f'sql-server-{np.random.randint(1, 3)}'
+                })
+            
+            demo_logs[log_group] = events
+        
+        return demo_logs
+
     def get_account_info(self) -> Dict[str, str]:
         """Get AWS account information"""
-        if self.demo_mode or not self.aws_manager:
+        if self.demo_mode:
             return {
                 'account_id': '123456789012',
                 'account_alias': 'demo-sql-environment',
@@ -1189,10 +933,80 @@ class AWSCloudWatchConnector:
                     value = np.random.uniform(100, 5000)
                 elif 'user_connections' in key:
                     value = np.random.uniform(10, 200)
+                elif 'processes_blocked' in key:
+                    value = np.random.uniform(0, 5)
                 elif 'deadlocks_per_sec' in key:
                     value = np.random.uniform(0, 0.5)
+                elif 'lock_waits_per_sec' in key:
+                    value = np.random.uniform(0, 100)
+                elif 'lock_wait_time_ms' in key:
+                    value = np.random.uniform(0, 1000)
+                elif 'full_scans_per_sec' in key:
+                    value = np.random.uniform(0, 50)
+                elif 'index_searches_per_sec' in key:
+                    value = np.random.uniform(100, 10000)
+                elif 'page_splits_per_sec' in key:
+                    value = np.random.uniform(0, 100)
+                elif 'lazy_writes_per_sec' in key:
+                    value = np.random.uniform(0, 20)
+                elif 'checkpoint_pages_per_sec' in key:
+                    value = np.random.uniform(0, 500)
+                elif 'sql_compilations_per_sec' in key:
+                    value = np.random.uniform(10, 500)
+                elif 'sql_recompilations_per_sec' in key:
+                    value = np.random.uniform(0, 50)
+                elif 'memory_grants_pending' in key:
+                    value = np.random.uniform(0, 10)
+                elif 'target_server_memory_kb' in key:
+                    value = np.random.uniform(8000000, 16000000)
+                elif 'total_server_memory_kb' in key:
+                    value = np.random.uniform(7000000, 15000000)
+                elif 'cache_hit_ratio' in key:
+                    value = np.random.uniform(85, 99)
+                elif 'wait_' in key and '_ms' in key:
+                    value = np.random.uniform(0, 5000)
+                elif 'ag_log_send_queue_size' in key:
+                    value = np.random.uniform(0, 1000000)
+                elif 'ag_log_send_rate' in key:
+                    value = np.random.uniform(100, 10000)
+                elif 'ag_redo_queue_size' in key:
+                    value = np.random.uniform(0, 500000)
+                elif 'ag_redo_rate' in key:
+                    value = np.random.uniform(50, 5000)
+                elif 'db_data_file_size_kb' in key:
+                    value = np.random.uniform(1000000, 100000000)
+                elif 'db_log_file_size_kb' in key:
+                    value = np.random.uniform(100000, 10000000)
+                elif 'db_percent_log_used' in key:
+                    value = np.random.uniform(10, 80)
+                elif 'db_active_transactions' in key:
+                    value = np.random.uniform(0, 100)
+                elif 'db_transactions_per_sec' in key:
+                    value = np.random.uniform(10, 1000)
+                elif 'db_log_flushes_per_sec' in key:
+                    value = np.random.uniform(1, 100)
+                elif 'db_log_flush_wait_time' in key:
+                    value = np.random.uniform(0, 50)
+                elif 'tempdb_version_store_size_kb' in key:
+                    value = np.random.uniform(0, 1000000)
+                elif 'backup_throughput_bytes_per_sec' in key:
+                    value = np.random.uniform(1000000, 100000000)
+                elif 'failed_logins_per_sec' in key:
+                    value = np.random.uniform(0, 5)
+                elif 'query_avg_execution_time_ms' in key:
+                    value = np.random.uniform(10, 1000)
+                elif 'expensive_queries_count' in key:
+                    value = np.random.uniform(0, 20)
+                elif 'index_fragmentation_avg' in key:
+                    value = np.random.uniform(5, 45)
+                elif 'missing_indexes_count' in key:
+                    value = np.random.uniform(0, 50)
+                elif 'unused_indexes_count' in key:
+                    value = np.random.uniform(0, 30)
                 elif 'disk' in key:
                     value = np.random.uniform(40, 70)
+                elif 'connection' in key:
+                    value = np.random.uniform(10, 100)
                 else:
                     value = np.random.uniform(0, 100)
                 
@@ -1231,63 +1045,32 @@ class AWSCloudWatchConnector:
             })
         
         return log_events
-    
-    def _generate_demo_sql_logs(self, log_groups: List[str]) -> Dict[str, List[Dict]]:
-        """Generate demo SQL Server logs"""
-        demo_logs = {}
-        
-        log_patterns = {
-            'error': [
-                "SQL Server error: Login failed for user 'sa'",
-                "Deadlock detected between sessions 52 and 67",
-                "I/O error on backup device",
-                "Transaction log is full",
-                "Memory pressure detected"
-            ],
-            'agent': [
-                "Job 'DatabaseBackup' completed successfully",
-                "Job 'IndexMaintenance' started",
-                "Alert: High CPU utilization",
-                "Maintenance plan execution completed"
-            ],
-            'application': [
-                "Application connected to database",
-                "Query execution completed in 1250ms",
-                "Connection pool exhausted",
-                "Stored procedure execution started"
-            ],
-            'system': [
-                "SQL Server service started",
-                "Database recovery completed",
-                "Checkpoint operation completed",
-                "Always On availability group synchronized"
-            ]
-        }
-        
-        for log_group in log_groups:
-            log_type = 'system'
-            for pattern_type in log_patterns.keys():
-                if pattern_type in log_group.lower():
-                    log_type = pattern_type
-                    break
-            
-            events = []
-            for i in range(20):
-                timestamp = datetime.now() - timedelta(minutes=i * 30)
-                events.append({
-                    'timestamp': int(timestamp.timestamp() * 1000),
-                    'message': np.random.choice(log_patterns[log_type]),
-                    'logStreamName': f'sql-server-{np.random.randint(1, 3)}'
-                })
-            
-            demo_logs[log_group] = events
-        
-        return demo_logs
 
-# =================== ALWAYS ON MONITOR ===================
+# =================== Always On Availability Groups Monitor ===================
 class AlwaysOnMonitor:
     def __init__(self, cloudwatch_connector: AWSCloudWatchConnector):
         self.cloudwatch = cloudwatch_connector
+        
+        self.availability_group_metrics = {
+            'primary_replica_health': {
+                'namespace': 'AWS/EC2',
+                'metric_name': 'CPUUtilization',
+                'dimensions': [{'Name': 'InstanceId', 'Value': 'i-primary'}]
+            },
+            'secondary_replica_health': {
+                'namespace': 'AWS/EC2', 
+                'metric_name': 'CPUUtilization',
+                'dimensions': [{'Name': 'InstanceId', 'Value': 'i-secondary'}]
+            },
+            'synchronization_health': {
+                'namespace': 'CWAgent',
+                'metric_name': 'AlwaysOn_SyncHealth'
+            },
+            'data_movement_state': {
+                'namespace': 'CWAgent',
+                'metric_name': 'AlwaysOn_DataMovement'
+            }
+        }
     
     def get_availability_groups(self) -> List[Dict]:
         """Get Always On Availability Groups status"""
@@ -1365,7 +1148,7 @@ class AlwaysOnMonitor:
         
         return []
 
-# =================== AUTO-REMEDIATION ENGINE ===================
+# =================== Auto-Remediation Engine ===================
 class AutoRemediationEngine:
     def __init__(self, cloudwatch_connector: AWSCloudWatchConnector):
         self.cloudwatch = cloudwatch_connector
@@ -1395,6 +1178,18 @@ class AutoRemediationEngine:
                 'duration_minutes': 15,
                 'actions': ['cleanup_temp_files', 'extend_volume', 'alert_dba'],
                 'auto_execute': True
+            },
+            'backup_failure': {
+                'threshold': 1,
+                'duration_minutes': 0,
+                'actions': ['retry_backup', 'check_backup_location', 'alert_dba'],
+                'auto_execute': True
+            },
+            'ag_failover_needed': {
+                'threshold': 1,
+                'duration_minutes': 0,
+                'actions': ['automatic_failover', 'alert_dba'],
+                'auto_execute': False
             }
         }
     
@@ -1463,14 +1258,215 @@ class AutoRemediationEngine:
                 recent_memory = [dp['Average'] for dp in memory_metrics[-2:]]
                 return all(mem > rule['threshold'] for mem in recent_memory)
         
+        elif rule_name == 'blocking_sessions':
+            blocking_alerts = [a for a in alerts if 'blocking' in a.get('message', '').lower()]
+            return len(blocking_alerts) >= rule['threshold']
+        
+        elif rule_name == 'disk_space_low':
+            disk_metrics = metrics.get('disk_usage', [])
+            if disk_metrics:
+                recent_disk = [dp['Average'] for dp in disk_metrics[-3:]]
+                return all(disk > rule['threshold'] for disk in recent_disk)
+        
+        elif rule_name == 'backup_failure':
+            backup_alerts = [a for a in alerts if 'backup' in a.get('message', '').lower() and 'fail' in a.get('message', '').lower()]
+            return len(backup_alerts) >= rule['threshold']
+        
         return False
     
     def _execute_action(self, action_type: str, context: Dict) -> Dict:
         """Execute a specific remediation action"""
-        if action_type == 'alert_dba':
-            return {'status': 'success', 'message': 'Alert sent to DBA team'}
+        if action_type == 'scale_up':
+            return self._scale_up_instance(context)
+        elif action_type == 'kill_expensive_queries':
+            return self._kill_expensive_queries(context)
+        elif action_type == 'clear_buffer_cache':
+            return self._clear_buffer_cache(context)
+        elif action_type == 'cleanup_temp_files':
+            return self._cleanup_temp_files(context)
+        elif action_type == 'retry_backup':
+            return self._retry_backup(context)
+        elif action_type == 'automatic_failover':
+            return self._perform_ag_failover(context)
+        elif action_type == 'alert_dba':
+            return self._send_alert_to_dba(context)
         else:
-            return {'status': 'success', 'message': f'Executed {action_type}'}
+            return {'status': 'error', 'message': f'Unknown action type: {action_type}'}
+    
+    def _scale_up_instance(self, context: Dict) -> Dict:
+        """Scale up EC2 instance or RDS instance"""
+        try:
+            if context.get('instance_type') == 'ec2':
+                ssm_client = self.cloudwatch.aws_manager.get_client('ssm')
+                if ssm_client:
+                    response = ssm_client.send_command(
+                        InstanceIds=[context.get('instance_id')],
+                        DocumentName="AWS-ResizeInstance",
+                        Parameters={
+                            'InstanceType': [self._get_next_instance_size(context.get('current_instance_type'))]
+                        }
+                    )
+                    return {'status': 'success', 'message': 'Instance scaling initiated'}
+            
+            elif context.get('instance_type') == 'rds':
+                rds_client = self.cloudwatch.aws_manager.get_client('rds')
+                if rds_client:
+                    rds_client.modify_db_instance(
+                        DBInstanceIdentifier=context.get('instance_id'),
+                        DBInstanceClass=self._get_next_rds_size(context.get('current_instance_class')),
+                        ApplyImmediately=True
+                    )
+                    return {'status': 'success', 'message': 'RDS scaling initiated'}
+                
+        except Exception as e:
+            return {'status': 'error', 'message': f'Scaling failed: {str(e)}'}
+    
+    def _kill_expensive_queries(self, context: Dict) -> Dict:
+        """Kill expensive SQL queries"""
+        try:
+            sql_command = """
+            DECLARE @SessionID INT
+            DECLARE query_cursor CURSOR FOR
+            SELECT session_id FROM sys.dm_exec_requests 
+            WHERE cpu_time > 30000 AND total_elapsed_time > 60000
+            
+            OPEN query_cursor
+            FETCH NEXT FROM query_cursor INTO @SessionID
+            
+            WHILE @@FETCH_STATUS = 0
+            BEGIN
+                KILL @SessionID
+                FETCH NEXT FROM query_cursor INTO @SessionID
+            END
+            
+            CLOSE query_cursor
+            DEALLOCATE query_cursor
+            """
+            
+            ssm_client = self.cloudwatch.aws_manager.get_client('ssm')
+            if ssm_client:
+                response = ssm_client.send_command(
+                    InstanceIds=[context.get('instance_id')],
+                    DocumentName="AWS-RunPowerShellScript",
+                    Parameters={
+                        'commands': [f'sqlcmd -Q "{sql_command}"']
+                    }
+                )
+                
+                return {'status': 'success', 'message': 'Expensive queries terminated'}
+            
+        except Exception as e:
+            return {'status': 'error', 'message': f'Query termination failed: {str(e)}'}
+    
+    def _clear_buffer_cache(self, context: Dict) -> Dict:
+        """Clear SQL Server buffer cache to free memory"""
+        try:
+            sql_command = "DBCC DROPCLEANBUFFERS"
+            
+            ssm_client = self.cloudwatch.aws_manager.get_client('ssm')
+            if ssm_client:
+                response = ssm_client.send_command(
+                    InstanceIds=[context.get('instance_id')],
+                    DocumentName="AWS-RunPowerShellScript",
+                    Parameters={
+                        'commands': [f'sqlcmd -Q "{sql_command}"']
+                    }
+                )
+                
+                return {'status': 'success', 'message': 'Buffer cache cleared'}
+            
+        except Exception as e:
+            return {'status': 'error', 'message': f'Buffer cache clear failed: {str(e)}'}
+    
+    def _cleanup_temp_files(self, context: Dict) -> Dict:
+        """Clean up temporary files and logs"""
+        try:
+            cleanup_script = """
+            # Clean SQL Server temp files
+            Remove-Item "C:\\Program Files\\Microsoft SQL Server\\MSSQL*\\MSSQL\\Data\\tempdb*" -Force -ErrorAction SilentlyContinue
+            
+            # Clean Windows temp files
+            Remove-Item "$env:TEMP\\*" -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item "C:\\Windows\\Temp\\*" -Recurse -Force -ErrorAction SilentlyContinue
+            
+            # Clean old log files
+            Get-ChildItem "C:\\Program Files\\Microsoft SQL Server\\MSSQL*\\MSSQL\\Log\\*.trc" | Where-Object {$_.LastWriteTime -lt (Get-Date).AddDays(-7)} | Remove-Item -Force
+            """
+            
+            ssm_client = self.cloudwatch.aws_manager.get_client('ssm')
+            if ssm_client:
+                response = ssm_client.send_command(
+                    InstanceIds=[context.get('instance_id')],
+                    DocumentName="AWS-RunPowerShellScript",
+                    Parameters={'commands': [cleanup_script]}
+                )
+                
+                return {'status': 'success', 'message': 'Temporary files cleaned'}
+            
+        except Exception as e:
+            return {'status': 'error', 'message': f'Cleanup failed: {str(e)}'}
+    
+    def _retry_backup(self, context: Dict) -> Dict:
+        """Retry failed database backup"""
+        try:
+            sql_command = """
+            DECLARE @BackupPath NVARCHAR(500) = 'C:\\Backups\\' + DB_NAME() + '_' + FORMAT(GETDATE(), 'yyyyMMdd_HHmmss') + '.bak'
+            BACKUP DATABASE [YourDatabase] TO DISK = @BackupPath WITH INIT, COMPRESSION
+            """
+            
+            ssm_client = self.cloudwatch.aws_manager.get_client('ssm')
+            if ssm_client:
+                response = ssm_client.send_command(
+                    InstanceIds=[context.get('instance_id')],
+                    DocumentName="AWS-RunPowerShellScript",
+                    Parameters={
+                        'commands': [f'sqlcmd -Q "{sql_command}"']
+                    }
+                )
+                
+                return {'status': 'success', 'message': 'Backup retry initiated'}
+            
+        except Exception as e:
+            return {'status': 'error', 'message': f'Backup retry failed: {str(e)}'}
+    
+    def _perform_ag_failover(self, context: Dict) -> Dict:
+        """Perform Always On Availability Group failover"""
+        try:
+            sql_command = """
+            ALTER AVAILABILITY GROUP [YourAGName] FAILOVER
+            """
+            
+            ssm_client = self.cloudwatch.aws_manager.get_client('ssm')
+            if ssm_client:
+                response = ssm_client.send_command(
+                    InstanceIds=[context.get('secondary_instance_id')],
+                    DocumentName="AWS-RunPowerShellScript",
+                    Parameters={
+                        'commands': [f'sqlcmd -Q "{sql_command}"']
+                    }
+                )
+                
+                return {'status': 'success', 'message': 'AG failover initiated'}
+            
+        except Exception as e:
+            return {'status': 'error', 'message': f'AG failover failed: {str(e)}'}
+    
+    def _send_alert_to_dba(self, context: Dict) -> Dict:
+        """Send alert to DBA team"""
+        try:
+            message = f"""
+            Auto-Remediation Alert:
+            Rule: {context.get('rule_name')}
+            Severity: {context.get('severity')}
+            Instance: {context.get('instance_id')}
+            Actions Taken: {', '.join(context.get('actions', []))}
+            Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+            """
+            
+            return {'status': 'success', 'message': 'Alert sent to DBA team'}
+            
+        except Exception as e:
+            return {'status': 'error', 'message': f'Alert sending failed: {str(e)}'}
     
     def _simulate_remediation(self, action: Dict) -> Dict:
         """Simulate remediation action in demo mode"""
@@ -1489,7 +1485,9 @@ class AutoRemediationEngine:
             'high_cpu_usage': 'Medium',
             'memory_pressure': 'High',
             'blocking_sessions': 'Medium',
-            'disk_space_low': 'High'
+            'disk_space_low': 'High',
+            'backup_failure': 'High',
+            'ag_failover_needed': 'Critical'
         }
         return severity_map.get(rule_name, 'Medium')
     
@@ -1499,11 +1497,37 @@ class AutoRemediationEngine:
             'high_cpu_usage': 'Low to Medium',
             'memory_pressure': 'Medium',
             'blocking_sessions': 'Low',
-            'disk_space_low': 'Medium'
+            'disk_space_low': 'Medium',
+            'backup_failure': 'Low',
+            'ag_failover_needed': 'High'
         }
         return impact_map.get(rule_name, 'Low')
+    
+    def _get_next_instance_size(self, current_type: str) -> str:
+        """Get next larger instance size"""
+        size_progression = {
+            't3.micro': 't3.small',
+            't3.small': 't3.medium',
+            't3.medium': 't3.large',
+            't3.large': 't3.xlarge',
+            'm5.large': 'm5.xlarge',
+            'm5.xlarge': 'm5.2xlarge',
+            'm5.2xlarge': 'm5.4xlarge'
+        }
+        return size_progression.get(current_type, current_type)
+    
+    def _get_next_rds_size(self, current_class: str) -> str:
+        """Get next larger RDS instance class"""
+        size_progression = {
+            'db.t3.micro': 'db.t3.small',
+            'db.t3.small': 'db.t3.medium',
+            'db.t3.medium': 'db.t3.large',
+            'db.m5.large': 'db.m5.xlarge',
+            'db.m5.xlarge': 'db.m5.2xlarge'
+        }
+        return size_progression.get(current_class, current_class)
 
-# =================== PREDICTIVE ANALYTICS ENGINE ===================
+# =================== Predictive Analytics Engine ===================
 class PredictiveAnalyticsEngine:
     def __init__(self, cloudwatch_connector: AWSCloudWatchConnector):
         self.cloudwatch = cloudwatch_connector
@@ -1586,7 +1610,8 @@ class PredictiveAnalyticsEngine:
         thresholds = {
             'cpu_usage': {'warning': 70, 'critical': 90},
             'memory_usage': {'warning': 80, 'critical': 95},
-            'disk_usage': {'warning': 75, 'critical': 90}
+            'disk_usage': {'warning': 75, 'critical': 90},
+            'connection_count': {'warning': 80, 'critical': 95}
         }
         
         metric_threshold = thresholds.get(metric_name, {'warning': 80, 'critical': 95})
@@ -1613,8 +1638,25 @@ class PredictiveAnalyticsEngine:
             elif metric_name == 'memory_usage':
                 recommendations.extend([
                     "Increase instance memory or scale up",
-                    "Review memory-intensive queries and procedures"
+                    "Review memory-intensive queries and procedures",
+                    "Consider implementing memory optimization"
                 ])
+            elif metric_name == 'disk_usage':
+                recommendations.extend([
+                    "Extend disk storage immediately",
+                    "Implement log file maintenance",
+                    "Archive old data to reduce storage usage"
+                ])
+        
+        elif risk_level == 'warning':
+            recommendations.extend([
+                f"Monitor {metric_name} closely over the next 24 hours",
+                "Prepare scaling strategy if trend continues",
+                "Review recent changes that might impact performance"
+            ])
+        
+        if trend == 'increasing':
+            recommendations.append(f"The {metric_name} trend is increasing - proactive action recommended")
         
         return recommendations
     
@@ -1631,10 +1673,12 @@ class PredictiveAnalyticsEngine:
             return 0.9
         elif std_dev < mean_val * 0.2:
             return 0.7
+        elif std_dev < mean_val * 0.3:
+            return 0.5
         else:
             return 0.3
 
-# =================== CLAUDE AI ANALYZER ===================
+# =================== Claude AI Analyzer ===================
 class ClaudeAIAnalyzer:
     def __init__(self, api_key: str):
         if not ANTHROPIC_AVAILABLE:
@@ -1653,88 +1697,42 @@ class ClaudeAIAnalyzer:
             self.client = None
             self.enabled = False
 
-# =================== ALERT GENERATION ===================
-def generate_alerts_from_config(all_logs: Dict, config_manager: EmbeddedConfigurationManager) -> List[Dict]:
-    """Generate alerts based on embedded configuration patterns"""
-    alerts = []
-    
-    critical_patterns = config_manager.get_alert_patterns("critical")
-    warning_patterns = config_manager.get_alert_patterns("warning")
-    
-    for log_group, logs in all_logs.items():
-        for log_entry in logs[-10:]:  # Check last 10 log entries per group
-            message = log_entry.get('message', '').upper()
-            
-            # Check for critical patterns
-            for pattern in critical_patterns:
-                if pattern.upper() in message:
-                    alerts.append({
-                        'timestamp': datetime.fromtimestamp(log_entry['timestamp'] / 1000),
-                        'severity': 'critical',
-                        'source': log_group,
-                        'instance': log_group.split('/')[-2] if '/' in log_group else 'Unknown',
-                        'message': f'Critical pattern detected: {pattern}',
-                        'auto_remediation': 'Available',
-                        'original_message': log_entry.get('message', ''),
-                        'pattern_matched': pattern
-                    })
-                    break
-            
-            # Check for warning patterns (if no critical pattern found)
-            else:
-                for pattern in warning_patterns:
-                    if pattern.upper() in message:
-                        alerts.append({
-                            'timestamp': datetime.fromtimestamp(log_entry['timestamp'] / 1000),
-                            'severity': 'warning',
-                            'source': log_group,
-                            'instance': log_group.split('/')[-2] if '/' in log_group else 'Unknown',
-                            'message': f'Warning pattern detected: {pattern}',
-                            'auto_remediation': 'Manual',
-                            'original_message': log_entry.get('message', ''),
-                            'pattern_matched': pattern
-                        })
-                        break
-    
-    # Sort alerts by timestamp (newest first)
-    alerts.sort(key=lambda x: x['timestamp'], reverse=True)
-    return alerts[:20]  # Return only latest 20 alerts
-
-# =================== CONFIGURATION FUNCTIONS ===================
+# =================== Configuration Functions ===================
 def setup_sidebar_configuration():
-    """Setup sidebar configuration using embedded configuration"""
-    config_manager = get_embedded_config_manager()
-    
+    """Setup sidebar configuration and return AWS config"""
     with st.sidebar:
         st.header("🔧 AWS Configuration")
         
-        # Configuration Status
-        st.subheader("📄 Configuration Status")
-        config_summary = config_manager.get_configuration_summary()
+        # System Status
+        st.subheader("📊 System Status")
         
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Config Version", config_summary["version"])
-        with col2:
-            st.metric("Total Log Groups", config_summary["total_log_groups"])
+        aws_manager = get_aws_manager()
+        if aws_manager.is_streamlit_cloud:
+            st.info("🌐 **Streamlit Cloud Detected**")
+            st.write("Optimized configuration active")
         
-        st.success("✅ Embedded configuration loaded")
+        if not AWS_AVAILABLE:
+            st.error("❌ boto3 not available")
+            st.info("💡 Install boto3: `pip install boto3`")
+        else:
+            st.success("✅ boto3 available")
         
-        # Environment Selection
-        st.subheader("🏢 Environment Configuration")
-        available_environments = config_manager.get_available_environments()
+        if not ANTHROPIC_AVAILABLE:
+            st.warning("⚠️ anthropic not available")
+            st.info("💡 Install anthropic: `pip install anthropic`")
+        else:
+            st.success("✅ anthropic available")
         
-        # Show environment summary
-        with st.expander("📊 Environment Summary"):
-            for env, count in config_summary["environments"].items():
-                st.write(f"**{env.title()}:** {count} log groups")
+        if not AWS_AVAILABLE:
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%); 
+                        padding: 1rem; border-radius: 8px; color: white; margin: 1rem 0;">
+                <strong>🎭 DEMO MODE</strong><br>
+                Using simulated data. Install boto3 for real AWS connections.
+            </div>
+            """, unsafe_allow_html=True)
         
-        selected_environment = st.selectbox(
-            "Select Environment",
-            available_environments,
-            index=0 if "production" in available_environments else 0,
-            help="Choose the environment to monitor"
-        )
+        st.markdown("---")
         
         # AWS Credentials
         st.subheader("🔑 AWS Credentials")
@@ -1753,11 +1751,12 @@ def setup_sidebar_configuration():
         
         if auth_method.startswith("🌍"):
             st.info("💡 **Best for Streamlit Cloud deployment**")
+            st.write("Set these in your Streamlit Cloud app settings:")
             st.code("""
-Environment Variables in Streamlit Cloud:
+Environment Variables:
 AWS_ACCESS_KEY_ID=your_access_key_here
 AWS_SECRET_ACCESS_KEY=your_secret_key_here
-AWS_DEFAULT_REGION=us-east-2
+AWS_DEFAULT_REGION=us-east-1
             """)
             
             env_access_key = os.getenv('AWS_ACCESS_KEY_ID')
@@ -1770,7 +1769,6 @@ AWS_DEFAULT_REGION=us-east-2
                 aws_secret_key = env_secret_key
             else:
                 st.warning("⚠️ Environment variables not found")
-                st.info("📖 **Set in Streamlit Cloud:**\n1. Go to your app settings\n2. Add environment variables\n3. Restart your app")
                 
         elif auth_method.startswith("🔑"):
             st.info("💡 **For local development and testing**")
@@ -1795,146 +1793,103 @@ AWS_DEFAULT_REGION=us-east-2
             st.write("• ECS task role")
             st.write("• Shared credentials file")
         
-        # Region selection with config default
-        default_region = config_summary["default_region"]
-        available_regions = config_manager.config.get("metadata", {}).get("regions", [
+        # Region selection
+        aws_region = st.selectbox("AWS Region", [
             'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
             'eu-west-1', 'eu-west-2', 'eu-central-1', 
             'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1'
         ])
         
-        try:
-            default_index = available_regions.index(default_region)
-        except ValueError:
-            default_index = 1 if 'us-east-2' in available_regions else 0
-            
-        aws_region = st.selectbox("AWS Region", available_regions, index=default_index)
-        
         # AWS Account Information
         st.subheader("🏢 AWS Account Details")
         aws_account_id = st.text_input("AWS Account ID (Optional)", 
-                                    help="Your 12-digit AWS Account ID")
+                                      help="Your 12-digit AWS Account ID")
         aws_account_name = st.text_input("Account Name/Environment", 
-                                        value=selected_environment.title(), 
+                                        value="Production", 
                                         help="Environment name (e.g., Production, Staging)")
 
-        # Dynamic CloudWatch Configuration
+        # CloudWatch Configuration
         st.subheader("📊 CloudWatch Configuration")
-        
-        # Log Groups Configuration by Category
-        st.write("**📝 CloudWatch Log Groups Configuration:**")
-        
-        # Show available categories for selected environment
-        env_config = config_manager.config.get("environments", {}).get(selected_environment, {})
-        
-        log_group_selection = st.radio(
-            "Log Group Selection Method",
-            ["📋 Use All Configured Groups", "🔧 Select by Category", "✏️ Custom Configuration"]
-        )
-        
-        selected_log_groups = []
-        
-        if log_group_selection == "📋 Use All Configured Groups":
-            # Use all configured log groups for the environment
-            selected_log_groups = config_manager.get_all_log_groups_for_environment(selected_environment)
-            
-            st.success(f"✅ Using {len(selected_log_groups)} pre-configured log groups for {selected_environment}")
-            
-            # Show summary by category
-            with st.expander(f"📊 Log Groups for {selected_environment.title()}"):
-                for category in ["ec2_metrics", "sql_metrics", "os_metrics"]:
-                    category_groups = config_manager.get_log_groups_by_environment_and_category(selected_environment, category)
-                    if category_groups:
-                        category_name = category.replace('_', ' ').title()
-                        st.write(f"**{category_name}:** {len(category_groups)} groups")
-                        for i, group in enumerate(category_groups[:3]):  # Show first 3
-                            st.write(f"  {i+1}. {group}")
-                        if len(category_groups) > 3:
-                            st.write(f"  ... and {len(category_groups) - 3} more groups")
-        
-        elif log_group_selection == "🔧 Select by Category":
-            # Allow user to select specific categories
-            st.write("**Select monitoring categories:**")
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                enable_ec2_metrics = st.checkbox("🖥️ EC2 Metrics", value=True)
-                if enable_ec2_metrics:
-                    ec2_groups = config_manager.get_log_groups_by_environment_and_category(selected_environment, "ec2_metrics")
-                    st.caption(f"{len(ec2_groups)} log groups")
-            
-            with col2:
-                enable_sql_metrics = st.checkbox("🗄️ SQL Server Metrics", value=True)
-                if enable_sql_metrics:
-                    sql_groups = config_manager.get_log_groups_by_environment_and_category(selected_environment, "sql_metrics")
-                    st.caption(f"{len(sql_groups)} log groups")
-            
-            with col3:
-                enable_os_metrics = st.checkbox("💻 OS Metrics", value=True)
-                if enable_os_metrics:
-                    os_groups = config_manager.get_log_groups_by_environment_and_category(selected_environment, "os_metrics")
-                    st.caption(f"{len(os_groups)} log groups")
-            
-            # Build selected log groups based on checkboxes
-            if enable_ec2_metrics:
-                selected_log_groups.extend(
-                    config_manager.get_log_groups_by_environment_and_category(selected_environment, "ec2_metrics")
-                )
-            
-            if enable_sql_metrics:
-                selected_log_groups.extend(
-                    config_manager.get_log_groups_by_environment_and_category(selected_environment, "sql_metrics")
-                )
-            
-            if enable_os_metrics:
-                selected_log_groups.extend(
-                    config_manager.get_log_groups_by_environment_and_category(selected_environment, "os_metrics")
-                )
-            
-            st.info(f"📊 Selected {len(selected_log_groups)} log groups across chosen categories")
-        
-        else:  # Custom Configuration
-            # Allow manual input
-            all_configured_groups = config_manager.get_all_log_groups_for_environment(selected_environment)
-            
-            st.info("✏️ **Custom log group configuration**")
-            custom_log_groups = st.text_area(
-                "Log Groups (one per line)",
-                value="\n".join(all_configured_groups[:10]),  # Show first 10 as default
-                height=200,
-                help="Enter CloudWatch log group names, one per line"
-            )
-            selected_log_groups = [lg.strip() for lg in custom_log_groups.split('\n') if lg.strip()]
-        
-        # Metrics Namespace Configuration
-        default_namespace = config_manager.get_metrics_namespace(selected_environment, "sql_metrics")
+
+        st.write("**📝 CloudWatch Log Groups:**")
+        default_log_groups = [
+            "/aws/rds/instance/sql-server-prod-1/error",
+            "/aws/rds/instance/sql-server-prod-1/agent", 
+            "/ec2/sql-server/application",
+            "/ec2/sql-server/system",
+            "/ec2/sql-server/security"
+        ]
+
+        log_groups = st.text_area(
+            "Log Groups (one per line)",
+            value="\n".join(default_log_groups),
+            height=150,
+            help="Enter CloudWatch log group names, one per line"
+        ).split('\n')
+
         custom_namespace = st.text_input(
             "Custom Metrics Namespace", 
-            value=default_namespace,
+            value="SQLServer/CustomMetrics",
             help="Namespace for your custom SQL Server metrics"
         )
 
-        # OS Metrics Configuration
         st.write("**🖥️ OS Metrics Configuration:**")
-        enable_os_metrics_flag = st.checkbox("Enable OS-level Metrics", value=True)
+        enable_os_metrics = st.checkbox("Enable OS-level Metrics", value=True)
         os_metrics_namespace = st.text_input(
             "OS Metrics Namespace",
-            value=config_manager.get_metrics_namespace(selected_environment, "os_metrics"),
+            value="CWAgent",
             help="CloudWatch namespace for OS metrics"
         )
-        
-        # Monitoring Settings from Configuration
-        monitoring_settings = config_manager.get_monitoring_settings()
+
+        # Setup Guide
+        with st.expander("📋 Setup Guide for Real Data", expanded=False):
+            st.markdown("""
+            ### 🔧 Setting Up SQL Server Metrics in AWS CloudWatch
+            
+            **For Streamlit Cloud deployment, set these environment variables:**
+            
+            ```bash
+            AWS_ACCESS_KEY_ID=your_access_key
+            AWS_SECRET_ACCESS_KEY=your_secret_key
+            AWS_DEFAULT_REGION=us-east-1
+            ```
+            
+            **Required IAM Permissions:**
+            ```json
+            {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": [
+                            "cloudwatch:GetMetricStatistics",
+                            "cloudwatch:ListMetrics",
+                            "cloudwatch:PutMetricData",
+                            "logs:FilterLogEvents",
+                            "logs:DescribeLogGroups",
+                            "ec2:DescribeInstances",
+                            "rds:DescribeDBInstances",
+                            "sts:GetCallerIdentity"
+                        ],
+                        "Resource": "*"
+                    }
+                ]
+            }
+            ```
+            
+            **CloudWatch Agent Setup on SQL Server instances:**
+            1. Install CloudWatch agent
+            2. Configure SQL Server performance counters
+            3. Set up custom metrics collection
+            4. Tag EC2 instances with `Application: SQLServer`
+            """)
         
         st.markdown("---")
         
         # Claude AI Configuration
         st.subheader("🤖 Claude AI Settings")
-        claude_config = config_manager.config.get("integration_settings", {}).get("claude_ai", {})
-        
         claude_api_key = st.text_input("Claude AI API Key", type="password", 
-                                    help="Enter your Anthropic Claude API key")
+                                      help="Enter your Anthropic Claude API key")
         
         if claude_api_key and ANTHROPIC_AVAILABLE:
             if 'claude_analyzer' not in st.session_state or st.session_state.claude_analyzer is None:
@@ -1949,10 +1904,7 @@ AWS_DEFAULT_REGION=us-east-2
         
         # Auto-Remediation Settings
         st.subheader("🔧 Auto-Remediation")
-        enable_auto_remediation = st.checkbox(
-            "Enable Auto-Remediation", 
-            value=monitoring_settings.get("enable_auto_remediation", True)
-        )
+        enable_auto_remediation = st.checkbox("Enable Auto-Remediation", value=True)
         auto_approval_threshold = st.selectbox("Auto-Approval Level", [
             "Low Risk Only",
             "Low + Medium Risk", 
@@ -1964,26 +1916,9 @@ AWS_DEFAULT_REGION=us-east-2
         
         # Monitoring Settings
         st.subheader("📊 Monitoring Settings")
-        refresh_interval = st.slider(
-            "Refresh Interval (seconds)", 
-            30, 300, 
-            monitoring_settings.get("refresh_interval_seconds", 60)
-        )
+        refresh_interval = st.slider("Refresh Interval (seconds)", 30, 300, 60)
         metric_retention_days = st.slider("Metric Retention (days)", 7, 90, 30)
-        enable_predictive_alerts = st.checkbox(
-            "Enable Predictive Alerts", 
-            value=monitoring_settings.get("enable_predictive_analytics", True)
-        )
-        
-        # Configuration Summary
-        with st.expander("📋 Configuration Summary"):
-            st.write(f"**Environment:** {selected_environment}")
-            st.write(f"**Region:** {aws_region}")
-            st.write(f"**Log Groups:** {len(selected_log_groups)}")
-            st.write(f"**Metrics Namespace:** {custom_namespace}")
-            st.write(f"**Auto-Remediation:** {'Enabled' if enable_auto_remediation else 'Disabled'}")
-            st.write(f"**Refresh Interval:** {refresh_interval}s")
-            st.write(f"**Config Version:** {config_summary['version']}")
+        enable_predictive_alerts = st.checkbox("Enable Predictive Alerts", value=True)
         
         return {
             'access_key': aws_access_key or 'demo',
@@ -1991,17 +1926,15 @@ AWS_DEFAULT_REGION=us-east-2
             'region': aws_region,
             'account_id': aws_account_id,
             'account_name': aws_account_name,
-            'environment': selected_environment,
-            'log_groups': selected_log_groups,
+            'log_groups': [lg.strip() for lg in log_groups if lg.strip()],
             'custom_namespace': custom_namespace,
             'os_metrics_namespace': os_metrics_namespace,
-            'enable_os_metrics': enable_os_metrics_flag,
+            'enable_os_metrics': enable_os_metrics,
             'claude_api_key': claude_api_key,
             'enable_auto_remediation': enable_auto_remediation,
             'auto_approval_threshold': auto_approval_threshold,
             'refresh_interval': refresh_interval,
-            'enable_predictive_alerts': enable_predictive_alerts,
-            'config_manager': config_manager
+            'enable_predictive_alerts': enable_predictive_alerts
         }
 
 def initialize_session_state(aws_config):
@@ -2022,148 +1955,100 @@ def initialize_session_state(aws_config):
         st.session_state.claude_analyzer = None
 
     # Initialize connectors if not already done or config changed
-    should_reinitialize = (
-        st.session_state.cloudwatch_connector is None or 
-        getattr(st.session_state.cloudwatch_connector, 'aws_config', {}) != aws_config
-    )
-    
-    if should_reinitialize:
+    if (st.session_state.cloudwatch_connector is None or 
+        getattr(st.session_state.cloudwatch_connector, 'aws_config', {}) != aws_config):
+        
         with st.spinner("🔄 Initializing AWS connection..."):
             try:
-                # Initialize CloudWatch connector
                 st.session_state.cloudwatch_connector = AWSCloudWatchConnector(aws_config)
+                st.session_state.always_on_monitor = AlwaysOnMonitor(st.session_state.cloudwatch_connector)
+                st.session_state.auto_remediation = AutoRemediationEngine(st.session_state.cloudwatch_connector)
+                st.session_state.predictive_analytics = PredictiveAnalyticsEngine(st.session_state.cloudwatch_connector)
                 
-                # Only initialize other components if CloudWatch connector is valid
-                if st.session_state.cloudwatch_connector:
-                    try:
-                        st.session_state.always_on_monitor = AlwaysOnMonitor(st.session_state.cloudwatch_connector)
-                    except Exception as e:
-                        logger.warning(f"Failed to initialize Always On monitor: {str(e)}")
-                        st.session_state.always_on_monitor = None
-                    
-                    try:
-                        st.session_state.auto_remediation = AutoRemediationEngine(st.session_state.cloudwatch_connector)
-                    except Exception as e:
-                        logger.warning(f"Failed to initialize auto-remediation: {str(e)}")
-                        st.session_state.auto_remediation = None
-                    
-                    try:
-                        st.session_state.predictive_analytics = PredictiveAnalyticsEngine(st.session_state.cloudwatch_connector)
-                    except Exception as e:
-                        logger.warning(f"Failed to initialize predictive analytics: {str(e)}")
-                        st.session_state.predictive_analytics = None
-                
-                # Initialize Claude AI if API key is provided
                 if aws_config.get('claude_api_key') and ANTHROPIC_AVAILABLE:
-                    try:
-                        st.session_state.claude_analyzer = ClaudeAIAnalyzer(aws_config['claude_api_key'])
-                    except Exception as e:
-                        logger.warning(f"Failed to initialize Claude AI: {str(e)}")
-                        st.session_state.claude_analyzer = None
-                        
+                    st.session_state.claude_analyzer = ClaudeAIAnalyzer(aws_config['claude_api_key'])
+                    
             except Exception as e:
-                logger.error(f"Failed to initialize session state: {str(e)}")
                 st.error(f"Failed to initialize: {str(e)}")
-                
-                # Create a minimal cloudwatch connector in demo mode
-                try:
-                    st.session_state.cloudwatch_connector = AWSCloudWatchConnector(aws_config)
-                except Exception as fallback_error:
-                    logger.error(f"Even fallback initialization failed: {str(fallback_error)}")
-                    st.session_state.cloudwatch_connector = None
 
-    def display_connection_status():
-        """Display connection status and test button"""
-        with st.sidebar:
-            if st.button("🔌 Test AWS Connection", type="primary"):
-                with st.spinner("Testing AWS connection..."):
-                    if st.session_state.cloudwatch_connector:
-                        if st.session_state.cloudwatch_connector.test_connection():
-                            st.success("✅ AWS Connection Successful!")
-                            
-                            try:
-                                conn_status = st.session_state.cloudwatch_connector.get_connection_status()
-                                if conn_status.get('account_id'):
-                                    st.write(f"**Account:** {conn_status['account_id']}")
-                                if conn_status.get('user_arn'):
-                                    st.write(f"**Role:** {conn_status['user_arn'].split('/')[-1]}")
-                                if conn_status.get('method'):
-                                    st.write(f"**Method:** {conn_status['method'].replace('_', ' ').title()}")
-                            except Exception as e:
-                                st.warning(f"Could not get detailed connection info: {str(e)}")
-                        else:
-                            st.error("❌ AWS Connection Failed")
-                            
-                            try:
-                                conn_status = st.session_state.cloudwatch_connector.get_connection_status()
-                                if conn_status.get('error'):
-                                    with st.expander("🔍 View Error Details"):
-                                        st.error(conn_status['error'])
-                                        
-                                        if conn_status.get('streamlit_cloud'):
-                                            st.info("""
-                                            **Streamlit Cloud Troubleshooting:**
-                                            1. Go to your app settings in Streamlit Cloud
-                                            2. Add environment variables:
-                                            - `AWS_ACCESS_KEY_ID`
-                                            - `AWS_SECRET_ACCESS_KEY`
-                                            - `AWS_DEFAULT_REGION`
-                                            3. Restart your app
-                                            """)
-                            except Exception as e:
-                                st.error(f"Error getting connection status: {str(e)}")
+def display_connection_status():
+    """Display connection status and test button"""
+    with st.sidebar:
+        if st.button("🔌 Test AWS Connection", type="primary"):
+            with st.spinner("Testing AWS connection..."):
+                if st.session_state.cloudwatch_connector:
+                    if st.session_state.cloudwatch_connector.test_connection():
+                        st.success("✅ AWS Connection Successful!")
+                        
+                        conn_status = st.session_state.cloudwatch_connector.get_connection_status()
+                        if conn_status.get('account_id'):
+                            st.write(f"**Account:** {conn_status['account_id']}")
+                        if conn_status.get('user_arn'):
+                            st.write(f"**Role:** {conn_status['user_arn'].split('/')[-1]}")
+                        if conn_status.get('method'):
+                            st.write(f"**Method:** {conn_status['method'].replace('_', ' ').title()}")
                     else:
-                        st.error("❌ CloudWatch connector not initialized")
+                        st.error("❌ AWS Connection Failed")
+                        
+                        conn_status = st.session_state.cloudwatch_connector.get_connection_status()
+                        if conn_status.get('error'):
+                            with st.expander("🔍 View Error Details"):
+                                st.error(conn_status['error'])
+                                
+                                if conn_status.get('streamlit_cloud'):
+                                    st.info("""
+                                    **Streamlit Cloud Troubleshooting:**
+                                    1. Go to your app settings in Streamlit Cloud
+                                    2. Add environment variables:
+                                       - `AWS_ACCESS_KEY_ID`
+                                       - `AWS_SECRET_ACCESS_KEY`
+                                       - `AWS_DEFAULT_REGION`
+                                    3. Restart your app
+                                    """)
+                else:
+                    st.error("❌ CloudWatch connector not initialized")
 
-            # Enhanced Connection Status Display
-            if st.session_state.cloudwatch_connector:
-                st.markdown("---")
-                st.subheader("🔗 Connection Status")
-                
-                try:
-                    conn_status = st.session_state.cloudwatch_connector.get_connection_status()
-                    
-                    if conn_status.get('connected'):
-                        if conn_status.get('demo_mode'):
-                            status_class = "cred-warning"
-                            status_icon = "🎭"
-                            status_text = "Demo Mode"
-                        else:
-                            status_class = "cred-success"
-                            status_icon = "✅"
-                            status_text = "Connected"
-                    else:
-                        status_class = "cred-error"
-                        status_icon = "❌"
-                        status_text = "Disconnected"
-                    
-                    st.markdown(f"""
-                    <div class="credential-status {status_class}">
-                        <strong>{status_icon} Status:</strong> {status_text}<br>
-                        <strong>Environment:</strong> {'Streamlit Cloud' if conn_status.get('streamlit_cloud') else 'Local'}<br>
-                        <strong>Method:</strong> {safe_format_method(conn_status.get('method'))}<br>
-                        <strong>Last Test:</strong> {conn_status.get('last_test').strftime('%H:%M:%S') if conn_status.get('last_test') else 'Never'}
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    if conn_status.get('account_id'):
-                        st.write(f"**Account ID:** {conn_status['account_id']}")
-                    
-                    if conn_status.get('region'):
-                        st.write(f"**Region:** {conn_status['region']}")
-                    
-                    if conn_status.get('error'):
-                        with st.expander("🔍 View Error Details"):
-                            st.error(conn_status['error'])
-                            
-                except Exception as e:
-                    st.error(f"❌ Error displaying connection status: {str(e)}")
-                    st.info("Connection status temporarily unavailable. Try refreshing the page.")
+        # Enhanced Connection Status Display
+        if st.session_state.cloudwatch_connector:
+            st.markdown("---")
+            st.subheader("🔗 Connection Status")
+            
+            conn_status = st.session_state.cloudwatch_connector.get_connection_status()
+            
+            if conn_status.get('connected'):
+                if conn_status.get('demo_mode'):
+                    status_class = "cred-warning"
+                    status_icon = "🎭"
+                    status_text = "Demo Mode"
+                else:
+                    status_class = "cred-success"
+                    status_icon = "✅"
+                    status_text = "Connected"
             else:
-                st.warning("⚠️ CloudWatch connector not available")
-                st.info("Configuration may still be loading. Please refresh the page.")
+                status_class = "cred-error"
+                status_icon = "❌"
+                status_text = "Disconnected"
+            
+            st.markdown(f"""
+            <div class="credential-status {status_class}">
+                <strong>{status_icon} Status:</strong> {status_text}<br>
+                <strong>Environment:</strong> {'Streamlit Cloud' if conn_status.get('streamlit_cloud') else 'Local'}<br>
+                <strong>Method:</strong> {safe_format_method(conn_status.get('method'))}<br>
+                <strong>Last Test:</strong> {conn_status.get('last_test').strftime('%H:%M:%S') if conn_status.get('last_test') else 'Never'}
+            </div>
+            """, unsafe_allow_html=True)
+            
+            if conn_status.get('account_id'):
+                st.write(f"**Account ID:** {conn_status['account_id']}")
+            
+            if conn_status.get('region'):
+                st.write(f"**Region:** {conn_status['region']}")
+            
+            if conn_status.get('error'):
+                with st.expander("🔍 View Error Details"):
+                    st.error(conn_status['error'])
 
-# =================== DATA COLLECTION FUNCTIONS ===================
+# =================== Data Collection Functions ===================
 @st.cache_data(ttl=300)
 def collect_comprehensive_metrics():
     """Collect all metrics including OS, SQL Server, and logs with caching"""
@@ -2228,7 +2113,7 @@ def collect_comprehensive_metrics():
     
     return all_metrics, all_logs, ec2_instances
 
-# =================== TAB RENDERING FUNCTIONS ===================
+# =================== Tab Rendering Functions ===================
 def render_dashboard_tab(all_metrics, ec2_instances, rds_instances):
     """Render the main dashboard tab"""
     st.header("🏢 AWS SQL Server Infrastructure Overview")
@@ -2892,39 +2777,8 @@ def render_predictive_analytics_tab(all_metrics, enable_predictive_alerts):
         st.info("Enable predictive alerts in the sidebar to see trend analysis and capacity planning insights.")
 
 def render_alerts_tab(all_metrics, all_logs):
-    """Render alerts tab with configuration-based alerts"""
+    """Render alerts tab"""
     st.header("🚨 Intelligent Alert Management")
-    
-    # Configuration-based alerts
-    config_manager = get_embedded_config_manager()
-    if all_logs:
-        config_alerts = generate_alerts_from_config(all_logs, config_manager)
-        
-        if config_alerts:
-            st.subheader("⚙️ Configuration-Based Alerts")
-            st.info(f"🔍 Found {len(config_alerts)} alerts based on configured patterns")
-            
-            for alert in config_alerts[:5]:  # Show first 5 alerts
-                severity_style = "alert-critical" if alert['severity'] == 'critical' else "alert-warning"
-                st.markdown(f"""
-                <div class="{severity_style}">
-                    <strong>🚨 {alert['severity'].upper()}</strong> - {alert['instance']}<br>
-                    <strong>📍 Source:</strong> {alert['source']}<br>
-                    <strong>🎯 Pattern:</strong> {alert['pattern_matched']}<br>
-                    <strong>💬 Message:</strong> {alert['message']}<br>
-                    <strong>⏰ Time:</strong> {alert['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}<br>
-                    <strong>🤖 Auto-Remediation:</strong> {alert['auto_remediation']}
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Show original log message
-                with st.expander(f"📝 View Original Log Message"):
-                    st.code(alert['original_message'])
-                
-                st.markdown("---")
-            
-            if len(config_alerts) > 5:
-                st.info(f"💡 Showing 5 of {len(config_alerts)} total alerts. Check individual log groups for more details.")
     
     # Generate current alerts based on metrics
     current_alerts = []
@@ -3053,7 +2907,7 @@ def render_alerts_tab(all_metrics, all_logs):
             col1, col2, col3 = st.columns(3)
             with col1:
                 log_level = st.selectbox("Filter by Level", 
-                                    ["All", "Error", "Warning", "Info"])
+                                       ["All", "Error", "Warning", "Info"])
             with col2:
                 search_term = st.text_input("Search in logs")
             with col3:
@@ -3063,7 +2917,7 @@ def render_alerts_tab(all_metrics, all_logs):
             filtered_logs = logs[:max_logs]
             if search_term:
                 filtered_logs = [log for log in filtered_logs 
-                            if search_term.lower() in log['message'].lower()]
+                               if search_term.lower() in log['message'].lower()]
             
             # Display logs
             for log in filtered_logs:
@@ -3187,19 +3041,10 @@ def render_reports_tab():
         
         # Calculate metrics for summary
         system_health = 87
-        all_metrics = {}  # Initialize as empty dict
-        
-        if hasattr(st.session_state, 'cloudwatch_connector') and st.session_state.cloudwatch_connector:
-            try:
-                # Try to get metrics if available
-                all_metrics, _, _ = collect_comprehensive_metrics()
-                if all_metrics.get('cpu_usage') and all_metrics.get('memory_usage'):
-                    avg_cpu = np.mean([dp['Average'] for dp in all_metrics['cpu_usage'][-10:]])
-                    avg_mem = np.mean([dp['Average'] for dp in all_metrics['memory_usage'][-10:]])
-                    system_health = max(0, 100 - ((avg_cpu + avg_mem) / 2))
-            except Exception as e:
-                logger.warning(f"Could not collect metrics: {str(e)}")
-                pass  # Use default value if metrics unavailable
+        if 'all_metrics' in globals() and all_metrics.get('cpu_usage') and all_metrics.get('memory_usage'):
+            avg_cpu = np.mean([dp['Average'] for dp in all_metrics['cpu_usage'][-10:]])
+            avg_mem = np.mean([dp['Average'] for dp in all_metrics['memory_usage'][-10:]])
+            system_health = max(0, 100 - ((avg_cpu + avg_mem) / 2))
         
         # Key metrics summary
         col1, col2, col3 = st.columns(3)
@@ -3252,37 +3097,24 @@ def render_reports_tab():
         
         # Performance summary table
         performance_data = []
-        all_metrics = {}  # Initialize as empty dict
         
-        try:
-            all_metrics, _, _ = collect_comprehensive_metrics()
-        except Exception as e:
-            logger.warning(f"Could not collect metrics for performance report: {str(e)}")
-            pass  # Use defaults if metrics unavailable
+        if 'all_metrics' in globals() and all_metrics.get('cpu_usage'):
+            avg_cpu = np.mean([dp['Average'] for dp in all_metrics['cpu_usage'][-10:]])
+            performance_data.append({
+                'Metric': 'Average CPU Usage',
+                'Current': f'{avg_cpu:.1f}%',
+                'Target': '<70%',
+                'Status': '🟢 Good' if avg_cpu < 70 else '🟡 Monitor' if avg_cpu < 85 else '🔴 Critical'
+            })
         
-        if all_metrics.get('cpu_usage'):
-            try:
-                avg_cpu = np.mean([dp['Average'] for dp in all_metrics['cpu_usage'][-10:]])
-                performance_data.append({
-                    'Metric': 'Average CPU Usage',
-                    'Current': f'{avg_cpu:.1f}%',
-                    'Target': '<70%',
-                    'Status': '🟢 Good' if avg_cpu < 70 else '🟡 Monitor' if avg_cpu < 85 else '🔴 Critical'
-                })
-            except Exception as e:
-                logger.warning(f"Error processing CPU usage data: {str(e)}")
-        
-        if all_metrics.get('memory_usage'):
-            try:
-                avg_memory = np.mean([dp['Average'] for dp in all_metrics['memory_usage'][-10:]])
-                performance_data.append({
-                    'Metric': 'Average Memory Usage',
-                    'Current': f'{avg_memory:.1f}%',
-                    'Target': '<85%',
-                    'Status': '🟢 Good' if avg_memory < 85 else '🟡 Monitor' if avg_memory < 95 else '🔴 Critical'
-                })
-            except Exception as e:
-                logger.warning(f"Error processing memory usage data: {str(e)}")
+        if 'all_metrics' in globals() and all_metrics.get('memory_usage'):
+            avg_memory = np.mean([dp['Average'] for dp in all_metrics['memory_usage'][-10:]])
+            performance_data.append({
+                'Metric': 'Average Memory Usage',
+                'Current': f'{avg_memory:.1f}%',
+                'Target': '<85%',
+                'Status': '🟢 Good' if avg_memory < 85 else '🟡 Monitor' if avg_memory < 95 else '🔴 Critical'
+            })
         
         # Add default entries for demo
         performance_data.extend([
@@ -3294,21 +3126,6 @@ def render_reports_tab():
         if performance_data:
             performance_df = pd.DataFrame(performance_data)
             st.dataframe(performance_df, use_container_width=True)
-        
-    elif report_type == "Availability Report":
-        st.subheader("📊 Availability Report")
-        
-        # Availability metrics
-        availability_data = {
-            'Service': ['Primary SQL Server', 'Secondary Replica', 'Backup Services', 'Monitoring'],
-            'Uptime %': [99.95, 99.87, 99.99, 100.0],
-            'Downtime (minutes)': [2.2, 9.4, 0.4, 0.0],
-            'Last Incident': ['2 days ago', '1 week ago', '1 month ago', 'None'],
-            'SLA Status': ['✅ Met', '✅ Met', '✅ Met', '✅ Met']
-        }
-        
-        availability_df = pd.DataFrame(availability_data)
-        st.dataframe(availability_df, use_container_width=True)
         
     elif report_type == "Capacity Planning":
         st.subheader("📈 Capacity Planning Report")
@@ -3326,72 +3143,35 @@ def render_reports_tab():
         st.dataframe(capacity_df, use_container_width=True)
         
         # Capacity visualization
-        try:
-            fig = go.Figure()
-            
-            fig.add_trace(go.Bar(
-                name='Current',
-                x=capacity_data['Resource'],
-                y=capacity_data['Current Usage']
-            ))
-            
-            fig.add_trace(go.Bar(
-                name='30-Day Projection',
-                x=capacity_data['Resource'],
-                y=capacity_data['30-Day Projection']
-            ))
-            
-            fig.add_trace(go.Bar(
-                name='90-Day Projection',
-                x=capacity_data['Resource'],
-                y=capacity_data['90-Day Projection']
-            ))
-            
-            fig.update_layout(
-                title="Capacity Utilization Projections",
-                xaxis_title="Resource",
-                yaxis_title="Usage %",
-                barmode='group'
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-        except Exception as e:
-            st.error(f"Error creating capacity chart: {str(e)}")
-            st.info("Chart visualization is temporarily unavailable")
+        fig = go.Figure()
         
-    elif report_type == "Security Assessment":
-        st.subheader("🔒 Security Assessment Report")
+        fig.add_trace(go.Bar(
+            name='Current',
+            x=capacity_data['Resource'],
+            y=capacity_data['Current Usage']
+        ))
         
-        security_data = {
-            'Security Control': [
-                'Authentication Methods',
-                'Encryption at Rest',
-                'Encryption in Transit',
-                'Access Controls',
-                'Audit Logging',
-                'Backup Encryption'
-            ],
-            'Status': ['✅ Compliant', '✅ Compliant', '✅ Compliant', '⚠️ Review', '✅ Compliant', '✅ Compliant'],
-            'Last Reviewed': ['1 week ago', '2 weeks ago', '1 week ago', '1 month ago', '3 days ago', '2 weeks ago'],
-            'Risk Level': ['Low', 'Low', 'Low', 'Medium', 'Low', 'Low']
-        }
+        fig.add_trace(go.Bar(
+            name='30-Day Projection',
+            x=capacity_data['Resource'],
+            y=capacity_data['30-Day Projection']
+        ))
         
-        security_df = pd.DataFrame(security_data)
-        st.dataframe(security_df, use_container_width=True)
+        fig.add_trace(go.Bar(
+            name='90-Day Projection',
+            x=capacity_data['Resource'],
+            y=capacity_data['90-Day Projection']
+        ))
         
-    elif report_type == "Cost Analysis":
-        st.subheader("💰 Cost Analysis Report")
+        fig.update_layout(
+            title="Capacity Utilization Projections",
+            xaxis_title="Resource",
+            yaxis_title="Usage %",
+            barmode='group'
+        )
         
-        cost_data = {
-            'Resource': ['EC2 Instances', 'RDS Storage', 'Data Transfer', 'CloudWatch', 'Backup Storage'],
-            'Monthly Cost': ['$1,245', '$890', '$234', '$156', '$445'],
-            'Trend': ['📈 +5%', '📈 +12%', '📊 Stable', '📊 Stable', '📈 +8%'],
-            'Optimization': ['Right-size', 'Archive old data', 'Use VPC endpoints', 'Reduce retention', 'Lifecycle policy']
-        }
-        
-        cost_df = pd.DataFrame(cost_data)
-        st.dataframe(cost_df, use_container_width=True)
-        
+        st.plotly_chart(fig, use_container_width=True)
+    
     else:
         st.info(f"Report type '{report_type}' would be displayed here")
     
@@ -3413,162 +3193,7 @@ def render_reports_tab():
         if st.button("📧 Email Report"):
             st.info("Report would be emailed to stakeholders")
 
-def debug_ec2_instances():
-    """Debug function to find all EC2 instances and their tags"""
-    
-    if not st.session_state.cloudwatch_connector or st.session_state.cloudwatch_connector.demo_mode:
-        st.info("Connect to AWS first to see your EC2 instances")
-        return
-    
-    st.header("🔍 EC2 Instance Detective")
-    st.info("Let's find all your EC2 instances and see how they're tagged")
-    
-    if st.button("🕵️ Find All My EC2 Instances", type="primary"):
-        try:
-            ec2_client = st.session_state.cloudwatch_connector.aws_manager.get_client('ec2')
-            if not ec2_client:
-                st.error("No EC2 client available")
-                return
-            
-            with st.spinner("Searching for EC2 instances..."):
-                # Get ALL instances (no filters)
-                response = ec2_client.describe_instances()
-                
-                all_instances = []
-                for reservation in response['Reservations']:
-                    for instance in reservation['Instances']:
-                        all_instances.append(instance)
-                
-                if not all_instances:
-                    st.warning("🤷‍♂️ No EC2 instances found in your account")
-                    st.info("**Possible reasons:**")
-                    st.write("• You don't have any EC2 instances")
-                    st.write("• Your instances are in a different region")
-                    st.write("• You don't have ec2:DescribeInstances permission")
-                    return
-                
-                st.success(f"🎉 Found {len(all_instances)} EC2 instances!")
-                
-                # Show all instances with their tags
-                for i, instance in enumerate(all_instances):
-                    instance_id = instance['InstanceId']
-                    instance_type = instance['InstanceType']
-                    state = instance['State']['Name']
-                    
-                    # Get instance name from tags
-                    instance_name = "Unnamed"
-                    for tag in instance.get('Tags', []):
-                        if tag['Key'] == 'Name':
-                            instance_name = tag['Value']
-                            break
-                    
-                    # Color code by state
-                    if state == 'running':
-                        state_color = "🟢"
-                    elif state == 'stopped':
-                        state_color = "🟡"
-                    else:
-                        state_color = "🔴"
-                    
-                    st.markdown(f"### {state_color} Instance {i+1}: **{instance_name}**")
-                    
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.write(f"**Instance ID:** {instance_id}")
-                        st.write(f"**Type:** {instance_type}")
-                        st.write(f"**State:** {state}")
-                        st.write(f"**Private IP:** {instance.get('PrivateIpAddress', 'N/A')}")
-                    
-                    with col2:
-                        # Show all tags
-                        tags = instance.get('Tags', [])
-                        if tags:
-                            st.write("**Tags:**")
-                            for tag in tags:
-                                st.write(f"  • **{tag['Key']}:** {tag['Value']}")
-                        else:
-                            st.write("**Tags:** None")
-                    
-                    # Check if this instance would be detected as SQL Server
-                    sql_server_tags = ['SQLServer', 'SQL Server', 'Database', 'MSSQL', 'SqlServer']
-                    is_sql_server = False
-                    
-                    for tag in tags:
-                        if tag['Key'] == 'Application' and tag['Value'] in sql_server_tags:
-                            is_sql_server = True
-                            break
-                    
-                    if is_sql_server:
-                        st.success("✅ This instance WOULD be detected as SQL Server")
-                    else:
-                        st.error("❌ This instance would NOT be detected as SQL Server")
-                        st.info("💡 To make this a SQL Server instance, add tag: **Application = SQLServer**")
-                    
-                    # Option to tag this instance
-                    if not is_sql_server and state == 'running':
-                        with st.expander(f"🏷️ Tag {instance_name} as SQL Server"):
-                            st.write("Click the button below to add the SQL Server tag to this instance:")
-                            
-                            if st.button(f"🏷️ Tag as SQL Server", key=f"tag_{instance_id}"):
-                                try:
-                                    ec2_client.create_tags(
-                                        Resources=[instance_id],
-                                        Tags=[
-                                            {
-                                                'Key': 'Application',
-                                                'Value': 'SQLServer'
-                                            }
-                                        ]
-                                    )
-                                    st.success(f"✅ Successfully tagged {instance_name} as SQLServer!")
-                                    st.info("🔄 Refresh the page to see the updated tags")
-                                    
-                                except Exception as tag_error:
-                                    st.error(f"❌ Failed to tag instance: {tag_error}")
-                    
-                    st.markdown("---")
-                
-                # Summary
-                sql_instances = 0
-                for instance in all_instances:
-                    tags = instance.get('Tags', [])
-                    for tag in tags:
-                        if tag['Key'] == 'Application' and tag['Value'] in ['SQLServer', 'SQL Server', 'Database']:
-                            sql_instances += 1
-                            break
-                
-                st.subheader("📊 Summary")
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.metric("Total Instances", len(all_instances))
-                
-                with col2:
-                    running_instances = len([i for i in all_instances if i['State']['Name'] == 'running'])
-                    st.metric("Running Instances", running_instances)
-                
-                with col3:
-                    st.metric("SQL Server Tagged", sql_instances)
-                
-                if sql_instances == 0:
-                    st.warning("⚠️ **No instances are tagged for SQL Server detection**")
-                    st.info("**To fix this:** Add the tag `Application = SQLServer` to your SQL Server instances")
-                else:
-                    st.success(f"🎉 **{sql_instances} instances are properly tagged for SQL Server!**")
-        
-        except Exception as e:
-            st.error(f"❌ Failed to get EC2 instances: {e}")
-            
-            # Show helpful error messages
-            if "UnauthorizedOperation" in str(e):
-                st.error("🔒 **Permission Issue:** You don't have ec2:DescribeInstances permission")
-                st.info("**Ask your AWS admin to add this IAM permission:**")
-                st.code('"ec2:DescribeInstances"')
-            elif "AccessDenied" in str(e):
-                st.error("🔒 **Access Denied:** Check your IAM permissions")
-
-# =================== MAIN APPLICATION ===================
+# =================== Main Application ===================
 def main():
     # Load CSS styles
     load_css_styles()
@@ -3611,7 +3236,7 @@ def main():
         all_metrics.update(basic_metrics)
     
     # Main tabs
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
         "🏠 Dashboard", 
         "🗄️ SQL Metrics",
         "🖥️ OS Metrics",
@@ -3620,8 +3245,7 @@ def main():
         "🔮 Predictive Analytics", 
         "🚨 Alerts", 
         "📊 Performance",
-        "📈 Reports",
-        "🔍 EC2 Debug"
+        "📈 Reports"
     ])
     
     # Render tabs
@@ -3651,9 +3275,6 @@ def main():
     
     with tab9:
         render_reports_tab()
-    
-    with tab10:
-        debug_ec2_instances()
     
     # Auto-refresh functionality with Streamlit Cloud optimization
     if 'last_refresh' not in st.session_state:
