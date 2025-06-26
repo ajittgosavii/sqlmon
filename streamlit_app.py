@@ -1850,126 +1850,125 @@ class ClaudeAIAnalyzer:
             self.enabled = False
 
 # =================== Configuration Functions ===================
-def setup_sidebar_configuration():
-    """Setup sidebar configuration and return AWS config"""
-    with st.sidebar:
-        st.header("🔧 AWS Configuration")
-        
-        # System Status
-        st.subheader("📊 System Status")
-        
-        aws_manager = get_aws_manager()
-        if aws_manager.is_streamlit_cloud:
-            st.info("🌐 **Streamlit Cloud Detected**")
-            st.write("Optimized configuration active")
-        
-        if not AWS_AVAILABLE:
-            st.error("❌ boto3 not available")
-            st.info("💡 Install boto3: `pip install boto3`")
-        else:
-            st.success("✅ boto3 available")
-        
-        if not ANTHROPIC_AVAILABLE:
-            st.warning("⚠️ anthropic not available")
-            st.info("💡 Install anthropic: `pip install anthropic`")
-        else:
-            st.success("✅ anthropic available")
-        
-        if not AWS_AVAILABLE:
-            st.markdown("""
-            <div style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%); 
-                        padding: 1rem; border-radius: 8px; color: white; margin: 1rem 0;">
-                <strong>🎭 DEMO MODE</strong><br>
-                Using simulated data. Install boto3 for real AWS connections.
-            </div>
-            """, unsafe_allow_html=True)
-        
-        st.markdown("---")
-        
-        # AWS Credentials
-        st.subheader("🔑 AWS Credentials")
-        
-        auth_method = st.radio(
-            "Authentication Method",
-            [
-                "🌍 Environment Variables (Recommended for Streamlit Cloud)",
-                "🔑 Manual Input",
-                "🏢 Default Credential Chain"
-            ]
-        )
-        
-        aws_access_key = None
-        aws_secret_key = None
-        
-        if auth_method.startswith("🌍"):
-            st.info("💡 **Best for Streamlit Cloud deployment**")
-            st.write("Set these in your Streamlit Cloud app settings:")
-            st.code("""
-Environment Variables:
-AWS_ACCESS_KEY_ID=your_access_key_here
-AWS_SECRET_ACCESS_KEY=your_secret_key_here
-AWS_DEFAULT_REGION=us-east-1
-            """)
+    def setup_sidebar_configuration():
+        """Setup sidebar configuration and return AWS config"""
+        with st.sidebar:
+            st.header("🔧 AWS Configuration")
             
-            env_access_key = os.getenv('AWS_ACCESS_KEY_ID')
-            env_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+            # System Status
+            st.subheader("📊 System Status")
             
-            if env_access_key and env_secret_key:
-                st.success("✅ Environment variables detected!")
-                st.write(f"**Access Key:** {env_access_key[:8]}...")
-                aws_access_key = env_access_key
-                aws_secret_key = env_secret_key
+            aws_manager = get_aws_manager()
+            if aws_manager.is_streamlit_cloud:
+                st.info("🌐 **Streamlit Cloud Detected**")
+                st.write("Optimized configuration active")
+            
+            if not AWS_AVAILABLE:
+                st.error("❌ boto3 not available")
+                st.info("💡 Install boto3: `pip install boto3`")
             else:
-                st.warning("⚠️ Environment variables not found")
+                st.success("✅ boto3 available")
+            
+            if not ANTHROPIC_AVAILABLE:
+                st.warning("⚠️ anthropic not available")
+                st.info("💡 Install anthropic: `pip install anthropic`")
+            else:
+                st.success("✅ anthropic available")
+            
+            if not AWS_AVAILABLE:
+                st.markdown("""
+                <div style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%); 
+                            padding: 1rem; border-radius: 8px; color: white; margin: 1rem 0;">
+                    <strong>🎭 DEMO MODE</strong><br>
+                    Using simulated data. Install boto3 for real AWS connections.
+                </div>
+                """, unsafe_allow_html=True)
+            
+            st.markdown("---")
+            
+            # AWS Credentials
+            st.subheader("🔑 AWS Credentials")
+            
+            auth_method = st.radio(
+                "Authentication Method",
+                [
+                    "🌍 Environment Variables (Recommended for Streamlit Cloud)",
+                    "🔑 Manual Input",
+                    "🏢 Default Credential Chain"
+                ]
+            )
+            
+            aws_access_key = None
+            aws_secret_key = None
+            
+            if auth_method.startswith("🌍"):
+                st.info("💡 **Best for Streamlit Cloud deployment**")
+                st.write("Set these in your Streamlit Cloud app settings:")
+                st.code("""
+    Environment Variables:
+    AWS_ACCESS_KEY_ID=your_access_key_here
+    AWS_SECRET_ACCESS_KEY=your_secret_key_here
+    AWS_DEFAULT_REGION=us-east-1
+                """)
                 
-        elif auth_method.startswith("🔑"):
-            st.info("💡 **For local development and testing**")
-            aws_access_key = st.text_input(
-                "AWS Access Key ID", 
-                type="password",
-                help="Your AWS Access Key ID (starts with AKIA or ASIA)",
-                placeholder="AKIAIOSFODNN7EXAMPLE"
-            )
+                env_access_key = os.getenv('AWS_ACCESS_KEY_ID')
+                env_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+                
+                if env_access_key and env_secret_key:
+                    st.success("✅ Environment variables detected!")
+                    st.write(f"**Access Key:** {env_access_key[:8]}...")
+                    aws_access_key = env_access_key
+                    aws_secret_key = env_secret_key
+                else:
+                    st.warning("⚠️ Environment variables not found")
+                    
+            elif auth_method.startswith("🔑"):
+                st.info("💡 **For local development and testing**")
+                aws_access_key = st.text_input(
+                    "AWS Access Key ID", 
+                    type="password",
+                    help="Your AWS Access Key ID (starts with AKIA or ASIA)",
+                    placeholder="AKIAIOSFODNN7EXAMPLE"
+                )
+                
+                aws_secret_key = st.text_input(
+                    "AWS Secret Access Key", 
+                    type="password",
+                    help="Your AWS Secret Access Key (40 characters)",
+                    placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+                )
+                
+            else:
+                st.info("💡 **For EC2 instances with IAM roles**")
+                st.write("Will attempt to use:")
+                st.write("• EC2 instance profile")
+                st.write("• ECS task role")
+                st.write("• Shared credentials file")
             
-            aws_secret_key = st.text_input(
-                "AWS Secret Access Key", 
-                type="password",
-                help="Your AWS Secret Access Key (40 characters)",
-                placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-            )
+            # Region selection
+            aws_region = st.selectbox("AWS Region", [
+                'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
+                'eu-west-1', 'eu-west-2', 'eu-central-1', 
+                'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1'
+            ])
             
-        else:
-            st.info("💡 **For EC2 instances with IAM roles**")
-            st.write("Will attempt to use:")
-            st.write("• EC2 instance profile")
-            st.write("• ECS task role")
-            st.write("• Shared credentials file")
-        
-        # Region selection
-        aws_region = st.selectbox("AWS Region", [
-            'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
-            'eu-west-1', 'eu-west-2', 'eu-central-1', 
-            'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1'
-        ])
-        
-        # AWS Account Information
-        st.subheader("🏢 AWS Account Details")
-        aws_account_id = st.text_input("AWS Account ID (Optional)", 
-                                      help="Your 12-digit AWS Account ID")
-        aws_account_name = st.text_input("Account Name/Environment", 
-                                        value="Production", 
-                                        help="Environment name (e.g., Production, Staging)")
+            # AWS Account Information
+            st.subheader("🏢 AWS Account Details")
+            aws_account_id = st.text_input("AWS Account ID (Optional)", 
+                                        help="Your 12-digit AWS Account ID")
+            aws_account_name = st.text_input("Account Name/Environment", 
+                                            value="Production", 
+                                            help="Environment name (e.g., Production, Staging)")
 
-       
-        # CloudWatch Configuration
-        st.subheader("📊 CloudWatch Configuration")
+            # CloudWatch Configuration
+            st.subheader("📊 CloudWatch Configuration")
 
-        st.success("✅ **Using your actual CloudWatch log groups!**")
+            st.success("✅ **Using your actual CloudWatch log groups!**")
 
-        st.write("**📝 Your CloudWatch Log Groups:**")
+            st.write("**📝 Your CloudWatch Log Groups:**")
 
             # Use YOUR EXACT log group names
-        your_actual_log_groups = [
+            your_actual_log_groups = [
                 "SQLServer/ErrorLogs",
                 "Windows/Application", 
                 "Windows/Security",
@@ -1978,16 +1977,16 @@ AWS_DEFAULT_REGION=us-east-1
             ]
 
             # Let user select which ones to monitor
-        selected_log_groups = st.multiselect(
-            "Select Log Groups to Monitor",
-        your_actual_log_groups,
-            default=your_actual_log_groups,  # Select all by default
-            help="These are your actual log groups from CloudWatch"
+            selected_log_groups = st.multiselect(
+                "Select Log Groups to Monitor",
+                your_actual_log_groups,
+                default=your_actual_log_groups,  # Select all by default
+                help="These are your actual log groups from CloudWatch"
             )
 
             # Option to add custom log groups
-        st.write("**➕ Additional Log Groups (Optional):**")
-        custom_log_groups_text = st.text_area(
+            st.write("**➕ Additional Log Groups (Optional):**")
+            custom_log_groups_text = st.text_area(
                 "Additional log groups (one per line)",
                 value="",
                 height=80,
@@ -1995,10 +1994,10 @@ AWS_DEFAULT_REGION=us-east-1
             )
 
             # Combine selected and custom log groups
-        log_groups = selected_log_groups.copy()
+            log_groups = selected_log_groups.copy()
             if custom_log_groups_text.strip():
-        custom_groups = [lg.strip() for lg in custom_log_groups_text.split('\n') if lg.strip()]
-        log_groups.extend(custom_groups)
+                custom_groups = [lg.strip() for lg in custom_log_groups_text.split('\n') if lg.strip()]
+                log_groups.extend(custom_groups)
 
             # Show final configuration
             if log_groups:
@@ -2012,102 +2011,116 @@ AWS_DEFAULT_REGION=us-east-1
             if st.button("🧪 Test Log Group Access"):
                 test_log_groups(log_groups)
 
-        # Setup Guide
-        with st.expander("📋 Setup Guide for Real Data", expanded=False):
-            st.markdown("""
-            ### 🔧 Setting Up SQL Server Metrics in AWS CloudWatch
-            
-            **For Streamlit Cloud deployment, set these environment variables:**
-            
-            ```bash
-            AWS_ACCESS_KEY_ID=your_access_key
-            AWS_SECRET_ACCESS_KEY=your_secret_key
-            AWS_DEFAULT_REGION=us-east-1
-            ```
-            
-            **Required IAM Permissions:**
-            ```json
-            {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Effect": "Allow",
-                        "Action": [
-                            "cloudwatch:GetMetricStatistics",
-                            "cloudwatch:ListMetrics",
-                            "cloudwatch:PutMetricData",
-                            "logs:FilterLogEvents",
-                            "logs:DescribeLogGroups",
-                            "ec2:DescribeInstances",
-                            "rds:DescribeDBInstances",
-                            "sts:GetCallerIdentity"
-                        ],
-                        "Resource": "*"
-                    }
-                ]
-            }
-            ```
-            
-            **CloudWatch Agent Setup on SQL Server instances:**
-            1. Install CloudWatch agent
-            2. Configure SQL Server performance counters
-            3. Set up custom metrics collection
-            4. Tag EC2 instances with `Application: SQLServer`
-            """)
-        
-        st.markdown("---")
-        
-        # Claude AI Configuration
-        st.subheader("🤖 Claude AI Settings")
-        claude_api_key = st.text_input("Claude AI API Key", type="password", 
-                                      help="Enter your Anthropic Claude API key")
-        
-        if claude_api_key and ANTHROPIC_AVAILABLE:
-            if 'claude_analyzer' not in st.session_state or st.session_state.claude_analyzer is None:
-                st.session_state.claude_analyzer = ClaudeAIAnalyzer(claude_api_key)
-            
-            if hasattr(st.session_state.claude_analyzer, 'enabled') and st.session_state.claude_analyzer.enabled:
-                st.success("✅ Claude AI Connected")
-            else:
-                st.error("❌ Claude AI Connection Failed")
-        
-        st.markdown("---")
-        
-        # Auto-Remediation Settings
-        st.subheader("🔧 Auto-Remediation")
-        enable_auto_remediation = st.checkbox("Enable Auto-Remediation", value=True)
-        auto_approval_threshold = st.selectbox("Auto-Approval Level", [
-            "Low Risk Only",
-            "Low + Medium Risk", 
-            "All Except Critical",
-            "Manual Approval Required"
-        ])
-        
-        st.markdown("---")
-        
-        # Monitoring Settings
-        st.subheader("📊 Monitoring Settings")
-        refresh_interval = st.slider("Refresh Interval (seconds)", 30, 300, 60)
-        metric_retention_days = st.slider("Metric Retention (days)", 7, 90, 30)
-        enable_predictive_alerts = st.checkbox("Enable Predictive Alerts", value=True)
-        
-        return {
-            'access_key': aws_access_key or 'demo',
-            'secret_key': aws_secret_key or 'demo',
-            'region': aws_region,
-            'account_id': aws_account_id,
-            'account_name': aws_account_name,
-            'log_groups': [lg.strip() for lg in log_groups if lg.strip()],
-            'custom_namespace': custom_namespace,
-            'os_metrics_namespace': os_metrics_namespace,
-            'enable_os_metrics': enable_os_metrics,
-            'claude_api_key': claude_api_key,
-            'enable_auto_remediation': enable_auto_remediation,
-            'auto_approval_threshold': auto_approval_threshold,
-            'refresh_interval': refresh_interval,
-            'enable_predictive_alerts': enable_predictive_alerts
-        }
+            # Additional CloudWatch settings
+            custom_namespace = st.text_input(
+                "Custom Metrics Namespace", 
+                value="SQLServer/CustomMetrics",
+                help="Namespace for your custom SQL Server metrics"
+            )
 
+            st.write("**🖥️ OS Metrics Configuration:**")
+            enable_os_metrics = st.checkbox("Enable OS-level Metrics", value=True)
+            os_metrics_namespace = st.text_input(
+                "OS Metrics Namespace",
+                value="CWAgent",
+                help="CloudWatch namespace for OS metrics"
+            )
+
+            # Setup Guide
+            with st.expander("📋 Setup Guide for Real Data", expanded=False):
+                st.markdown("""
+                ### 🔧 Setting Up SQL Server Metrics in AWS CloudWatch
+                
+                **For Streamlit Cloud deployment, set these environment variables:**
+                
+                ```bash
+                AWS_ACCESS_KEY_ID=your_access_key
+                AWS_SECRET_ACCESS_KEY=your_secret_key
+                AWS_DEFAULT_REGION=us-east-1
+                ```
+                
+                **Required IAM Permissions:**
+                ```json
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "cloudwatch:GetMetricStatistics",
+                                "cloudwatch:ListMetrics",
+                                "cloudwatch:PutMetricData",
+                                "logs:FilterLogEvents",
+                                "logs:DescribeLogGroups",
+                                "ec2:DescribeInstances",
+                                "rds:DescribeDBInstances",
+                                "sts:GetCallerIdentity"
+                            ],
+                            "Resource": "*"
+                        }
+                    ]
+                }
+                ```
+                
+                **CloudWatch Agent Setup on SQL Server instances:**
+                1. Install CloudWatch agent
+                2. Configure SQL Server performance counters
+                3. Set up custom metrics collection
+                4. Tag EC2 instances with `Application: SQLServer`
+                """)
+            
+            st.markdown("---")
+            
+            # Claude AI Configuration
+            st.subheader("🤖 Claude AI Settings")
+            claude_api_key = st.text_input("Claude AI API Key", type="password", 
+                                        help="Enter your Anthropic Claude API key")
+            
+            if claude_api_key and ANTHROPIC_AVAILABLE:
+                if 'claude_analyzer' not in st.session_state or st.session_state.claude_analyzer is None:
+                    st.session_state.claude_analyzer = ClaudeAIAnalyzer(claude_api_key)
+                
+                if hasattr(st.session_state.claude_analyzer, 'enabled') and st.session_state.claude_analyzer.enabled:
+                    st.success("✅ Claude AI Connected")
+                else:
+                    st.error("❌ Claude AI Connection Failed")
+            
+            st.markdown("---")
+            
+            # Auto-Remediation Settings
+            st.subheader("🔧 Auto-Remediation")
+            enable_auto_remediation = st.checkbox("Enable Auto-Remediation", value=True)
+            auto_approval_threshold = st.selectbox("Auto-Approval Level", [
+                "Low Risk Only",
+                "Low + Medium Risk", 
+                "All Except Critical",
+                "Manual Approval Required"
+            ])
+            
+            st.markdown("---")
+            
+            # Monitoring Settings
+            st.subheader("📊 Monitoring Settings")
+            refresh_interval = st.slider("Refresh Interval (seconds)", 30, 300, 60)
+            metric_retention_days = st.slider("Metric Retention (days)", 7, 90, 30)
+            enable_predictive_alerts = st.checkbox("Enable Predictive Alerts", value=True)
+            
+            return {
+                'access_key': aws_access_key or 'demo',
+                'secret_key': aws_secret_key or 'demo',
+                'region': aws_region,
+                'account_id': aws_account_id,
+                'account_name': aws_account_name,
+                'log_groups': log_groups,
+                'custom_namespace': custom_namespace,
+                'os_metrics_namespace': os_metrics_namespace,
+                'enable_os_metrics': enable_os_metrics,
+                'claude_api_key': claude_api_key,
+                'enable_auto_remediation': enable_auto_remediation,
+                'auto_approval_threshold': auto_approval_threshold,
+                'refresh_interval': refresh_interval,
+                'enable_predictive_alerts': enable_predictive_alerts
+        }
 def initialize_session_state(aws_config):
     """Initialize session state variables"""
     if 'cloudwatch_connector' not in st.session_state:
