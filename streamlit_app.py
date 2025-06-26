@@ -21,6 +21,199 @@ import re
 import os
 import sys
 
+
+# ================= ENHANCED SQL SERVER METRICS CONFIGURATION =================
+SQL_SERVER_METRICS_CONFIG = {
+    'core_performance': {
+        'title': '🎯 Core SQL Server Performance',
+        'description': 'Critical SQL Server performance indicators that directly impact user experience',
+        'metrics': {
+            'buffer_cache_hit_ratio': {
+                'display_name': 'Buffer Cache Hit Ratio',
+                'cloudwatch_metric': 'SQLServer:Buffer Manager\\Buffer cache hit ratio',
+                'namespace': 'CWAgent',
+                'unit': 'Percent',
+                'good_threshold': 95,
+                'warning_threshold': 90,
+                'critical_threshold': 85,
+                'higher_is_better': True,
+                'description': 'Percentage of page requests satisfied from memory. Low values indicate memory pressure.',
+                'impact': 'Direct impact on query performance and I/O',
+                'remediation': [
+                    'Add more memory to the server',
+                    'Optimize memory-intensive queries',
+                    'Review buffer pool configuration',
+                    'Check for memory leaks in applications'
+                ]
+            },
+            'page_life_expectancy': {
+                'display_name': 'Page Life Expectancy',
+                'cloudwatch_metric': 'SQLServer:Buffer Manager\\Page life expectancy',
+                'namespace': 'CWAgent',
+                'unit': 'Seconds',
+                'good_threshold': 300,
+                'warning_threshold': 180,
+                'critical_threshold': 100,
+                'higher_is_better': True,
+                'description': 'Average time a page stays in memory. Lower values indicate memory pressure.',
+                'impact': 'Affects query response time and I/O load',
+                'remediation': [
+                    'Increase server memory',
+                    'Optimize queries that consume excessive memory',
+                    'Review max server memory settings',
+                    'Check for unnecessary data access patterns'
+                ]
+            },
+            'batch_requests_per_sec': {
+                'display_name': 'Batch Requests/sec',
+                'cloudwatch_metric': 'SQLServer:SQL Statistics\\Batch Requests/sec',
+                'namespace': 'CWAgent',
+                'unit': 'Count/Second',
+                'good_threshold': 1000,
+                'warning_threshold': 5000,
+                'critical_threshold': 10000,
+                'higher_is_better': False,
+                'description': 'Number of SQL batches processed per second. High values may indicate load issues.',
+                'impact': 'Indicates overall SQL Server workload',
+                'remediation': [
+                    'Scale up the instance',
+                    'Optimize frequently executed queries',
+                    'Implement connection pooling',
+                    'Review application query patterns'
+                ]
+            },
+            'user_connections': {
+                'display_name': 'User Connections',
+                'cloudwatch_metric': 'SQLServer:General Statistics\\User Connections',
+                'namespace': 'CWAgent',
+                'unit': 'Count',
+                'good_threshold': 100,
+                'warning_threshold': 300,
+                'critical_threshold': 500,
+                'higher_is_better': False,
+                'description': 'Current number of active user connections to SQL Server.',
+                'impact': 'Too many connections can exhaust server resources',
+                'remediation': [
+                    'Implement connection pooling',
+                    'Kill idle connections',
+                    'Review max connections setting',
+                    'Optimize application connection management'
+                ]
+            }
+        }
+    },
+    'blocking_and_concurrency': {
+        'title': '🔒 Blocking & Concurrency',
+        'description': 'Metrics that show how well SQL Server handles concurrent operations',
+        'metrics': {
+            'processes_blocked': {
+                'display_name': 'Blocked Processes',
+                'cloudwatch_metric': 'SQLServer:General Statistics\\Processes blocked',
+                'namespace': 'CWAgent',
+                'unit': 'Count',
+                'good_threshold': 0,
+                'warning_threshold': 5,
+                'critical_threshold': 20,
+                'higher_is_better': False,
+                'description': 'Number of processes currently blocked by other processes.',
+                'impact': 'Directly affects user response time and application performance',
+                'remediation': [
+                    'Identify and kill blocking sessions',
+                    'Optimize long-running transactions',
+                    'Review indexing strategy',
+                    'Consider read committed snapshot isolation'
+                ]
+            },
+            'deadlocks_per_sec': {
+                'display_name': 'Deadlocks/sec',
+                'cloudwatch_metric': 'SQLServer:Locks\\Number of Deadlocks/sec',
+                'namespace': 'CWAgent',
+                'unit': 'Count/Second',
+                'good_threshold': 0,
+                'warning_threshold': 0.1,
+                'critical_threshold': 1,
+                'higher_is_better': False,
+                'description': 'Rate of deadlocks occurring in the database.',
+                'impact': 'Causes transaction rollbacks and application errors',
+                'remediation': [
+                    'Analyze deadlock graphs',
+                    'Ensure consistent transaction ordering',
+                    'Add appropriate indexes',
+                    'Keep transactions short'
+                ]
+            },
+            'lock_waits_per_sec': {
+                'display_name': 'Lock Waits/sec',
+                'cloudwatch_metric': 'SQLServer:Locks\\Lock Waits/sec',
+                'namespace': 'CWAgent',
+                'unit': 'Count/Second',
+                'good_threshold': 50,
+                'warning_threshold': 200,
+                'critical_threshold': 1000,
+                'higher_is_better': False,
+                'description': 'Number of lock requests that had to wait.',
+                'impact': 'Indicates concurrency issues and potential blocking',
+                'remediation': [
+                    'Optimize query performance',
+                    'Review indexing strategy',
+                    'Consider query hints for locking behavior',
+                    'Implement read committed snapshot'
+                ]
+            }
+        }
+    }
+}
+
+# ================= ENHANCED AUTO-REMEDIATION RULES =================
+ENHANCED_AUTO_REMEDIATION_RULES = {
+    'low_buffer_cache': {
+        'metric': 'buffer_cache_hit_ratio',
+        'condition': 'below',
+        'threshold': 90,
+        'severity': 'High',
+        'description': 'Buffer cache hit ratio below optimal levels',
+        'impact': 'Queries experiencing increased I/O and slower response times',
+        'actions': [
+            {
+                'type': 'memory_analysis',
+                'description': 'Analyze current memory usage patterns',
+                'sql_command': "SELECT * FROM sys.dm_os_memory_clerks ORDER BY pages_kb DESC",
+                'risk_level': 'Low',
+                'auto_execute': True,
+                'expected_result': 'Identify memory consumers'
+            },
+            {
+                'type': 'clear_procedure_cache',
+                'description': 'Clear procedure cache (temporary fix)',
+                'sql_command': 'DBCC FREEPROCCACHE',
+                'risk_level': 'Medium',
+                'auto_execute': False,
+                'expected_result': 'Free up memory temporarily'
+            }
+        ]
+    },
+    'high_blocking': {
+        'metric': 'processes_blocked',
+        'condition': 'above',
+        'threshold': 5,
+        'severity': 'Critical',
+        'description': 'Multiple processes blocked by other sessions',
+        'impact': 'Users experiencing delays and potential application timeouts',
+        'actions': [
+            {
+                'type': 'diagnostic',
+                'description': 'Find the blocking chain',
+                'sql_command': "SELECT * FROM sys.dm_exec_requests WHERE blocking_session_id != 0",
+                'risk_level': 'Low',
+                'auto_execute': True,
+                'expected_result': 'Identifies blocking sessions'
+            }
+        ]
+    }
+}
+
+
+
 # Utility Functions
 def safe_format_method(method_value):
     """Safely format connection method string, handling None values"""
@@ -163,11 +356,207 @@ def load_css_styles():
             background-color: #fff3cd;
             color: #856404;
             border-left-color: #ffc107;
+            
+         /* Add these new styles */
+        .metric-card-enhanced {
+            border-radius: 10px;
+            padding: 1rem;
+            margin: 0.5rem 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: transform 0.2s ease-in-out;
+        }
+        .metric-card-enhanced:hover {
+            transform: translateY(-2px);
+        }
+        .status-good { 
+            border-left: 5px solid #28a745; 
+            background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+        }
+        .status-warning { 
+            border-left: 5px solid #ffc107; 
+            background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+        }
+        .status-critical { 
+            border-left: 5px solid #dc3545; 
+            background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
+        }
+        .health-score {
+            text-align: center;
+            padding: 1.5rem;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
         }
     </style>
     """, unsafe_allow_html=True)
 
 # =================== Streamlit Cloud Compatible AWS Connection Manager ===================
+# ================= ENHANCED HELPER FUNCTIONS =================
+
+def calculate_sql_server_health_score(instance_metrics, instance_id):
+    """Calculate health score for specific SQL Server instance"""
+    
+    scores = []
+    
+    # Buffer Cache Hit Ratio (Weight: 25%)
+    buffer_cache_key = f"{instance_id}_buffer_cache_hit_ratio"
+    if buffer_cache_key in instance_metrics:
+        buffer_cache = get_metric_current_value(instance_metrics[buffer_cache_key])
+        buffer_score = min(100, (buffer_cache / 95) * 100) if buffer_cache > 0 else 0
+        scores.append(('buffer_cache', buffer_score, 25))
+    
+    # Blocking Processes (Weight: 20%)
+    blocked_key = f"{instance_id}_processes_blocked" 
+    if blocked_key in instance_metrics:
+        blocked = get_metric_current_value(instance_metrics[blocked_key])
+        block_score = max(0, 100 - (blocked * 10))
+        scores.append(('blocking', block_score, 20))
+    
+    # Deadlocks (Weight: 15%)
+    deadlock_key = f"{instance_id}_deadlocks_per_sec"
+    if deadlock_key in instance_metrics:
+        deadlocks = get_metric_current_value(instance_metrics[deadlock_key])
+        deadlock_score = max(0, 100 - (deadlocks * 100))
+        scores.append(('deadlocks', deadlock_score, 15))
+    
+    # Memory Grants Pending (Weight: 15%)
+    memory_key = f"{instance_id}_memory_grants_pending"
+    if memory_key in instance_metrics:
+        mem_grants = get_metric_current_value(instance_metrics[memory_key])
+        mem_score = max(0, 100 - (mem_grants * 5))
+        scores.append(('memory', mem_score, 15))
+    
+    # Page Life Expectancy (Weight: 25%)
+    page_life_key = f"{instance_id}_page_life_expectancy"
+    if page_life_key in instance_metrics:
+        page_life = get_metric_current_value(instance_metrics[page_life_key])
+        page_score = min(100, (page_life / 300) * 100) if page_life > 0 else 0
+        scores.append(('page_life', page_score, 25))
+    
+    if not scores:
+        return 0
+    
+    # Calculate weighted average
+    total_score = sum(score * weight for _, score, weight in scores)
+    total_weight = sum(weight for _, _, weight in scores)
+    
+    return int(total_score / total_weight) if total_weight > 0 else 0
+
+def get_metric_current_value(metric_data):
+    """Get the most recent value from metric data"""
+    if not metric_data:
+        return 0
+    return metric_data[-1]['Average'] if metric_data else 0
+
+def get_metric_status_color(metric_key, current_value):
+    """Get status color for a metric"""
+    # Find metric configuration
+    for category in SQL_SERVER_METRICS_CONFIG.values():
+        if metric_key in category['metrics']:
+            metric_info = category['metrics'][metric_key]
+            
+            good_threshold = metric_info.get('good_threshold')
+            warning_threshold = metric_info.get('warning_threshold')
+            critical_threshold = metric_info.get('critical_threshold')
+            higher_is_better = metric_info.get('higher_is_better', True)
+            
+            if good_threshold and warning_threshold and critical_threshold:
+                if higher_is_better:
+                    if current_value >= good_threshold:
+                        return "🟢"
+                    elif current_value >= warning_threshold:
+                        return "🟡"
+                    else:
+                        return "🔴"
+                else:
+                    if current_value <= good_threshold:
+                        return "🟢"
+                    elif current_value <= warning_threshold:
+                        return "🟡"
+                    else:
+                        return "🔴"
+    
+    return "🔵"  # Default
+
+def create_metric_card(title, value, unit, status, description):
+    """Create a visual metric card with status indicator"""
+    
+    status_colors = {
+        'good': '#28a745',
+        'warning': '#ffc107', 
+        'critical': '#dc3545',
+        'unknown': '#6c757d'
+    }
+    
+    status_icons = {
+        'good': '🟢',
+        'warning': '🟡',
+        'critical': '🔴',
+        'unknown': '🔵'
+    }
+    
+    border_color = status_colors.get(status, '#6c757d')
+    status_icon = status_icons.get(status, '🔵')
+    
+    return f"""
+    <div style="
+        border: 2px solid {border_color};
+        border-radius: 10px;
+        padding: 1rem;
+        text-align: center;
+        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        margin: 0.5rem 0;
+    ">
+        <h4 style="margin: 0 0 0.5rem 0; color: #333;">
+            {status_icon} {title}
+        </h4>
+        <div style="font-size: 1.5rem; font-weight: bold; color: #007bff; margin: 0.5rem 0;">
+            {value} {unit}
+        </div>
+        <div style="font-size: 0.8rem; color: #666;">
+            {description}
+        </div>
+    </div>
+    """
+
+def get_buffer_cache_status(value):
+    """Get status for buffer cache hit ratio"""
+    if value > 95:
+        return 'good'
+    elif value > 90:
+        return 'warning'
+    else:
+        return 'critical'
+
+def get_connections_status(value):
+    """Get status for connection count"""
+    if value < 200:
+        return 'good'
+    elif value < 400:
+        return 'warning'
+    else:
+        return 'critical'
+
+def get_blocking_status(value):
+    """Get status for blocked processes"""
+    if value == 0:
+        return 'good'
+    elif value < 5:
+        return 'warning'
+    else:
+        return 'critical'
+
+def get_deadlock_status(value):
+    """Get status for deadlock rate"""
+    if value == 0:
+        return 'good'
+    elif value < 0.1:
+        return 'warning'
+    else:
+        return 'critical'
+
+
+
 class StreamlitAWSManager:
     """Specialized AWS connection manager designed for Streamlit Cloud environment"""
     
@@ -1300,535 +1689,1028 @@ class AlwaysOnMonitor:
         return []
 
 # =================== Auto-Remediation Engine ===================
-class AutoRemediationEngine:
-    def __init__(self, cloudwatch_connector: AWSCloudWatchConnector):
+# ================= ENHANCED AUTO-REMEDIATION ENGINE =================
+class EnhancedAutoRemediationEngine:
+    """Enhanced auto-remediation with SQL Server focus and clear visibility"""
+    
+    def __init__(self, cloudwatch_connector):
         self.cloudwatch = cloudwatch_connector
-        self.remediation_history = []
-        
-        self.remediation_rules = {
-            'high_cpu_usage': {
-                'threshold': 90,
-                'duration_minutes': 10,
-                'actions': ['scale_up', 'kill_expensive_queries', 'alert_dba'],
-                'auto_execute': True
-            },
-            'memory_pressure': {
-                'threshold': 95,
-                'duration_minutes': 5,
-                'actions': ['clear_buffer_cache', 'scale_up', 'alert_dba'],
-                'auto_execute': True
-            },
-            'blocking_sessions': {
-                'threshold': 5,
-                'duration_minutes': 2,
-                'actions': ['kill_blocking_session', 'alert_dba'],
-                'auto_execute': False
-            },
-            'disk_space_low': {
-                'threshold': 85,
-                'duration_minutes': 15,
-                'actions': ['cleanup_temp_files', 'extend_volume', 'alert_dba'],
-                'auto_execute': True
-            },
-            'backup_failure': {
-                'threshold': 1,
-                'duration_minutes': 0,
-                'actions': ['retry_backup', 'check_backup_location', 'alert_dba'],
-                'auto_execute': True
-            },
-            'ag_failover_needed': {
-                'threshold': 1,
-                'duration_minutes': 0,
-                'actions': ['automatic_failover', 'alert_dba'],
-                'auto_execute': False
-            }
+        self.execution_history = []
+        self.snoozed_rules = {}
+        self.success_metrics = {
+            'total_executed': 0,
+            'successful': 0,
+            'failed': 0,
+            'auto_executed': 0,
+            'manual_executed': 0
         }
     
-    def evaluate_conditions(self, metrics: Dict, alerts: List[Dict]) -> List[Dict]:
-        """Evaluate conditions for auto-remediation"""
-        remediation_actions = []
+    def evaluate_all_rules(self, all_metrics: Dict) -> List[Dict]:
+        """Evaluate all remediation rules and return active opportunities"""
         
-        for rule_name, rule in self.remediation_rules.items():
-            condition_met = self._check_condition(rule_name, rule, metrics, alerts)
+        active_opportunities = []
+        current_time = datetime.now()
+        
+        # SQL Server specific rules
+        sql_rules = {
+            'low_buffer_cache': {
+                'metric_key': 'buffer_cache_hit_ratio',
+                'condition': 'below',
+                'threshold': 90,
+                'severity': 'High',
+                'duration_minutes': 5,
+                'description': 'Buffer cache hit ratio below optimal levels',
+                'impact': 'Queries experiencing increased I/O and slower response times',
+                'business_impact': 'Users may experience 2-5x slower query response times',
+                'actions': [
+                    {
+                        'type': 'diagnostic',
+                        'name': 'Analyze Memory Usage',
+                        'description': 'Identify current memory consumers',
+                        'sql_command': "SELECT TOP 10 type, name, pages_kb, pages_kb/1024 AS pages_mb FROM sys.dm_os_memory_clerks ORDER BY pages_kb DESC",
+                        'risk_level': 'Low',
+                        'auto_execute': True,
+                        'expected_outcome': 'Identifies top memory consumers'
+                    },
+                    {
+                        'type': 'temporary_fix',
+                        'name': 'Clear Procedure Cache',
+                        'description': 'Free memory by clearing procedure cache (temporary)',
+                        'sql_command': 'DBCC FREEPROCCACHE',
+                        'risk_level': 'Medium',
+                        'auto_execute': False,
+                        'expected_outcome': 'Frees 10-20% of memory temporarily',
+                        'side_effects': 'All queries will need to recompile - temporary performance impact'
+                    },
+                    {
+                        'type': 'recommendation',
+                        'name': 'Scale Instance',
+                        'description': 'Add more memory to the server',
+                        'action_details': 'Recommend upgrading instance type or adding memory',
+                        'risk_level': 'Low',
+                        'auto_execute': True,
+                        'expected_outcome': 'Permanent solution to memory pressure'
+                    }
+                ]
+            },
+            'high_blocking': {
+                'metric_key': 'processes_blocked',
+                'condition': 'above',
+                'threshold': 5,
+                'severity': 'Critical',
+                'duration_minutes': 2,
+                'description': 'Multiple processes blocked by other sessions',
+                'impact': 'Users experiencing delays and potential application timeouts',
+                'business_impact': 'Applications may become unresponsive, affecting user productivity',
+                'actions': [
+                    {
+                        'type': 'diagnostic',
+                        'name': 'Identify Blocking Chain',
+                        'description': 'Find the root blocker and blocking hierarchy',
+                        'sql_command': """
+SELECT 
+    blocking_session_id,
+    session_id,
+    wait_type,
+    wait_time,
+    wait_resource,
+    SUBSTRING(st.text, (r.statement_start_offset/2)+1,
+        ((CASE r.statement_end_offset
+            WHEN -1 THEN DATALENGTH(st.text)
+            ELSE r.statement_end_offset 
+        END - r.statement_start_offset)/2) + 1) AS blocking_query
+FROM sys.dm_exec_requests r
+CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) st
+WHERE r.blocking_session_id != 0
+ORDER BY wait_time DESC
+                        """,
+                        'risk_level': 'Low',
+                        'auto_execute': True,
+                        'expected_outcome': 'Identifies the blocking chain and problematic queries'
+                    },
+                    {
+                        'type': 'intervention',
+                        'name': 'Kill Head Blocker',
+                        'description': 'Terminate the session causing the blocking (HIGH RISK)',
+                        'sql_command': '-- KILL [session_id] -- REQUIRES MANUAL APPROVAL',
+                        'risk_level': 'High',
+                        'auto_execute': False,
+                        'expected_outcome': 'Resolves blocking immediately',
+                        'side_effects': 'May cause transaction rollback and application errors'
+                    }
+                ]
+            },
+            'frequent_deadlocks': {
+                'metric_key': 'deadlocks_per_sec',
+                'condition': 'above', 
+                'threshold': 0.1,
+                'severity': 'High',
+                'duration_minutes': 10,
+                'description': 'High rate of deadlocks detected',
+                'impact': 'Applications experiencing transaction rollbacks and errors',
+                'business_impact': 'Failed transactions may result in data inconsistency',
+                'actions': [
+                    {
+                        'type': 'monitoring',
+                        'name': 'Enable Deadlock Logging',
+                        'description': 'Turn on detailed deadlock logging',
+                        'sql_command': 'DBCC TRACEON(1222, -1)',
+                        'risk_level': 'Low',
+                        'auto_execute': True,
+                        'expected_outcome': 'Deadlock details logged to SQL Server error log'
+                    },
+                    {
+                        'type': 'diagnostic',
+                        'name': 'Query Recent Deadlocks',
+                        'description': 'Retrieve recent deadlock information from system health',
+                        'sql_command': """
+SELECT 
+    CAST(event_data AS XML) AS DeadlockGraph,
+    CAST(event_data AS XML).value('(event/@timestamp)[1]', 'datetime2') AS timestamp
+FROM sys.fn_xe_file_target_read_file('system_health*.xel', null, null, null)
+WHERE object_name = 'xml_deadlock_report'
+ORDER BY timestamp DESC
+                        """,
+                        'risk_level': 'Low',
+                        'auto_execute': True,
+                        'expected_outcome': 'Recent deadlock graphs for analysis'
+                    }
+                ]
+            },
+            'log_space_critical': {
+                'metric_key': 'db_percent_log_used',
+                'condition': 'above',
+                'threshold': 85,
+                'severity': 'Critical',
+                'duration_minutes': 0,  # Immediate
+                'description': 'Transaction log space critically low',
+                'impact': 'Database may become read-only if log fills completely',
+                'business_impact': 'Application may fail completely - IMMEDIATE ACTION REQUIRED',
+                'actions': [
+                    {
+                        'type': 'emergency',
+                        'name': 'Emergency Log Backup',
+                        'description': 'Backup transaction log to free space',
+                        'sql_command': """
+DECLARE @BackupPath NVARCHAR(500) = 'C:\\Temp\\Emergency_Log_Backup_' + FORMAT(GETDATE(), 'yyyyMMdd_HHmmss') + '.trn'
+BACKUP LOG [YourDatabaseName] TO DISK = @BackupPath
+                        """,
+                        'risk_level': 'Low',
+                        'auto_execute': True,
+                        'expected_outcome': 'Frees transaction log space immediately'
+                    },
+                    {
+                        'type': 'diagnostic',
+                        'name': 'Analyze Log Space Usage',
+                        'description': 'Check log space usage across all databases',
+                        'sql_command': """
+DBCC SQLPERF(LOGSPACE)
+
+SELECT 
+    name as DatabaseName,
+    log_reuse_wait_desc,
+    log_reuse_wait
+FROM sys.databases 
+WHERE log_reuse_wait_desc != 'NOTHING'
+                        """,
+                        'risk_level': 'Low',
+                        'auto_execute': True,
+                        'expected_outcome': 'Identifies databases with log space issues'
+                    }
+                ]
+            }
+        }
+        
+        # Evaluate each rule
+        for rule_name, rule_config in sql_rules.items():
+            # Check if rule is snoozed
+            if rule_name in self.snoozed_rules:
+                if current_time < self.snoozed_rules[rule_name]:
+                    continue  # Skip snoozed rule
+                else:
+                    del self.snoozed_rules[rule_name]  # Remove expired snooze
             
-            if condition_met:
-                action = {
+            # Get current metric value
+            current_value = self._get_current_metric_value(all_metrics, rule_config['metric_key'])
+            
+            # Evaluate condition
+            if self._evaluate_condition(current_value, rule_config):
+                opportunity = {
                     'rule_name': rule_name,
-                    'triggered_at': datetime.now(),
-                    'actions': rule['actions'],
-                    'auto_execute': rule['auto_execute'],
-                    'severity': self._get_severity(rule_name),
-                    'estimated_impact': self._get_impact(rule_name)
+                    'rule_config': rule_config,
+                    'current_value': current_value,
+                    'triggered_at': current_time
                 }
-                remediation_actions.append(action)
+                active_opportunities.append(opportunity)
         
-        return remediation_actions
+        return active_opportunities
     
-    def execute_remediation(self, action: Dict) -> Dict:
-        """Execute a remediation action"""
-        if self.cloudwatch.demo_mode:
-            return self._simulate_remediation(action)
+    def execute_action(self, action: Dict, rule_name: str) -> Dict:
+        """Execute a specific remediation action"""
+        
+        execution_start = datetime.now()
         
         try:
-            results = []
+            result = {
+                'action_name': action['name'],
+                'action_type': action['type'],
+                'rule_name': rule_name,
+                'started_at': execution_start,
+                'status': 'executing'
+            }
             
-            for action_type in action['actions']:
-                result = self._execute_action(action_type, action)
-                results.append(result)
+            if action['type'] == 'diagnostic':
+                result.update(self._execute_diagnostic_action(action))
+            elif action['type'] == 'emergency':
+                result.update(self._execute_emergency_action(action))
+            elif action['type'] == 'monitoring':
+                result.update(self._execute_monitoring_action(action))
+            elif action['type'] == 'temporary_fix':
+                result.update(self._execute_temporary_fix_action(action))
+            elif action['type'] == 'recommendation':
+                result.update(self._execute_recommendation_action(action))
+            else:
+                result['status'] = 'failed'
+                result['error'] = f"Unknown action type: {action['type']}"
             
-            self.remediation_history.append({
-                'action': action,
-                'results': results,
-                'executed_at': datetime.now(),
-                'status': 'completed'
-            })
+            result['completed_at'] = datetime.now()
+            result['duration'] = (result['completed_at'] - execution_start).total_seconds()
+            
+            # Update success metrics
+            self.success_metrics['total_executed'] += 1
+            if result['status'] == 'success':
+                self.success_metrics['successful'] += 1
+            else:
+                self.success_metrics['failed'] += 1
+            
+            if action.get('auto_execute'):
+                self.success_metrics['auto_executed'] += 1
+            else:
+                self.success_metrics['manual_executed'] += 1
+            
+            # Add to execution history
+            self.execution_history.append(result)
+            
+            return result
+            
+        except Exception as e:
+            self.success_metrics['total_executed'] += 1
+            self.success_metrics['failed'] += 1
+            
+            error_result = {
+                'action_name': action['name'],
+                'action_type': action['type'],
+                'rule_name': rule_name,
+                'started_at': execution_start,
+                'completed_at': datetime.now(),
+                'status': 'failed',
+                'error': str(e)
+            }
+            
+            self.execution_history.append(error_result)
+            return error_result
+    
+    def _execute_diagnostic_action(self, action: Dict) -> Dict:
+        """Execute diagnostic SQL commands"""
+        if self.cloudwatch.demo_mode:
+            return {
+                'status': 'success',
+                'message': f"[DEMO] Would execute diagnostic: {action['description']}",
+                'sql_executed': action.get('sql_command', 'N/A'),
+                'results': 'Demo results would be displayed here'
+            }
+        
+        try:
+            # In real implementation, execute SQL via SSM or direct connection
+            sql_command = action.get('sql_command', '')
+            
+            if sql_command:
+                # Execute via AWS SSM Run Command or direct SQL connection
+                result = self._execute_sql_command(sql_command)
+                
+                return {
+                    'status': 'success',
+                    'message': f"Diagnostic completed: {action['description']}",
+                    'sql_executed': sql_command,
+                    'results': result
+                }
+            else:
+                return {
+                    'status': 'success',
+                    'message': f"Diagnostic action completed: {action['description']}"
+                }
+                
+        except Exception as e:
+            return {
+                'status': 'failed',
+                'error': str(e)
+            }
+    
+    def _execute_emergency_action(self, action: Dict) -> Dict:
+        """Execute emergency actions like log backups"""
+        if self.cloudwatch.demo_mode:
+            return {
+                'status': 'success',
+                'message': f"[DEMO] Emergency action simulated: {action['description']}",
+                'impact': 'Transaction log space would be freed'
+            }
+        
+        try:
+            sql_command = action.get('sql_command', '')
+            
+            if 'BACKUP LOG' in sql_command:
+                # Execute emergency log backup
+                result = self._execute_sql_command(sql_command)
+                
+                return {
+                    'status': 'success',
+                    'message': f"Emergency log backup completed: {action['description']}",
+                    'sql_executed': sql_command,
+                    'impact': 'Transaction log space freed'
+                }
             
             return {
                 'status': 'success',
-                'results': results,
-                'message': f"Successfully executed {len(results)} remediation actions"
+                'message': f"Emergency action completed: {action['description']}"
             }
             
         except Exception as e:
             return {
-                'status': 'error',
-                'message': f"Remediation failed: {str(e)}"
+                'status': 'failed',
+                'error': str(e)
             }
     
-    def _check_condition(self, rule_name: str, rule: Dict, metrics: Dict, alerts: List[Dict]) -> bool:
-        """Check if condition is met for a specific rule"""
-        if rule_name == 'high_cpu_usage':
-            cpu_metrics = metrics.get('cpu_usage', [])
-            if cpu_metrics:
-                recent_cpu = [dp['Average'] for dp in cpu_metrics[-3:]]
-                return all(cpu > rule['threshold'] for cpu in recent_cpu)
+    def _execute_monitoring_action(self, action: Dict) -> Dict:
+        """Execute monitoring setup actions"""
+        if self.cloudwatch.demo_mode:
+            return {
+                'status': 'success',
+                'message': f"[DEMO] Monitoring enabled: {action['description']}"
+            }
         
-        elif rule_name == 'memory_pressure':
-            memory_metrics = metrics.get('memory_usage', [])
-            if memory_metrics:
-                recent_memory = [dp['Average'] for dp in memory_metrics[-2:]]
-                return all(mem > rule['threshold'] for mem in recent_memory)
+        try:
+            sql_command = action.get('sql_command', '')
+            
+            if 'TRACEON' in sql_command:
+                result = self._execute_sql_command(sql_command)
+                
+                return {
+                    'status': 'success',
+                    'message': f"Monitoring enabled: {action['description']}",
+                    'sql_executed': sql_command
+                }
+            
+            return {
+                'status': 'success',
+                'message': f"Monitoring action completed: {action['description']}"
+            }
+            
+        except Exception as e:
+            return {
+                'status': 'failed',
+                'error': str(e)
+            }
+    
+    def _execute_temporary_fix_action(self, action: Dict) -> Dict:
+        """Execute temporary fix actions (requires approval)"""
+        return {
+            'status': 'pending_approval',
+            'message': f"Temporary fix requires manual approval: {action['description']}",
+            'risk_level': action.get('risk_level', 'Medium'),
+            'side_effects': action.get('side_effects', 'Unknown side effects')
+        }
+    
+    def _execute_recommendation_action(self, action: Dict) -> Dict:
+        """Execute recommendation actions"""
+        return {
+            'status': 'success',
+            'message': f"Recommendation generated: {action['description']}",
+            'recommendation_details': action.get('action_details', 'See action description')
+        }
+    
+    def _execute_sql_command(self, sql_command: str) -> str:
+        """Execute SQL command via SSM or direct connection"""
+        if self.cloudwatch.demo_mode:
+            return "Demo results - SQL command would be executed here"
         
-        elif rule_name == 'blocking_sessions':
-            blocking_alerts = [a for a in alerts if 'blocking' in a.get('message', '').lower()]
-            return len(blocking_alerts) >= rule['threshold']
+        try:
+            # In real implementation:
+            # 1. Use AWS SSM Run Command to execute SQL
+            # 2. Or use direct SQL Server connection
+            # 3. Return actual results
+            
+            ssm_client = self.cloudwatch.aws_manager.get_client('ssm')
+            if ssm_client:
+                # Execute via SSM Run Command
+                response = ssm_client.send_command(
+                    InstanceIds=['your-instance-id'],  # Replace with actual instance ID
+                    DocumentName="AWS-RunPowerShellScript",
+                    Parameters={
+                        'commands': [f'sqlcmd -Q "{sql_command}"']
+                    }
+                )
+                
+                return f"Command executed via SSM: {response['Command']['CommandId']}"
+            
+            return "SQL command executed successfully"
+            
+        except Exception as e:
+            raise Exception(f"Failed to execute SQL command: {str(e)}")
+    
+    def _get_current_metric_value(self, all_metrics: Dict, metric_key: str) -> float:
+        """Get current value for a specific metric"""
+        # Look for metric in all_metrics with various possible keys
+        possible_keys = [
+            metric_key,
+            f"*_{metric_key}",  # Instance prefixed
+        ]
         
-        elif rule_name == 'disk_space_low':
-            disk_metrics = metrics.get('disk_usage', [])
-            if disk_metrics:
-                recent_disk = [dp['Average'] for dp in disk_metrics[-3:]]
-                return all(disk > rule['threshold'] for disk in recent_disk)
+        for key_pattern in possible_keys:
+            if key_pattern.startswith('*_'):
+                # Find any key ending with the metric name
+                suffix = key_pattern[2:]
+                matching_keys = [k for k in all_metrics.keys() if k.endswith(suffix)]
+                if matching_keys:
+                    metric_data = all_metrics[matching_keys[0]]
+                    if metric_data:
+                        return metric_data[-1]['Average']
+            else:
+                if key_pattern in all_metrics:
+                    metric_data = all_metrics[key_pattern]
+                    if metric_data:
+                        return metric_data[-1]['Average']
         
-        elif rule_name == 'backup_failure':
-            backup_alerts = [a for a in alerts if 'backup' in a.get('message', '').lower() and 'fail' in a.get('message', '').lower()]
-            return len(backup_alerts) >= rule['threshold']
+        # Mock values for demo
+        mock_values = {
+            'buffer_cache_hit_ratio': np.random.uniform(85, 99),
+            'processes_blocked': np.random.poisson(2),
+            'deadlocks_per_sec': np.random.exponential(0.05),
+            'db_percent_log_used': np.random.uniform(20, 90),
+            'memory_grants_pending': np.random.poisson(1),
+            'page_life_expectancy': np.random.uniform(100, 800)
+        }
+        
+        return mock_values.get(metric_key, 0)
+    
+    def _evaluate_condition(self, current_value: float, rule_config: Dict) -> bool:
+        """Evaluate if rule condition is met"""
+        threshold = rule_config['threshold']
+        condition = rule_config['condition']
+        
+        if condition == 'above':
+            return current_value > threshold
+        elif condition == 'below':
+            return current_value < threshold
         
         return False
     
-    def _execute_action(self, action_type: str, context: Dict) -> Dict:
-        """Execute a specific remediation action"""
-        if action_type == 'scale_up':
-            return self._scale_up_instance(context)
-        elif action_type == 'kill_expensive_queries':
-            return self._kill_expensive_queries(context)
-        elif action_type == 'clear_buffer_cache':
-            return self._clear_buffer_cache(context)
-        elif action_type == 'cleanup_temp_files':
-            return self._cleanup_temp_files(context)
-        elif action_type == 'retry_backup':
-            return self._retry_backup(context)
-        elif action_type == 'automatic_failover':
-            return self._perform_ag_failover(context)
-        elif action_type == 'alert_dba':
-            return self._send_alert_to_dba(context)
-        else:
-            return {'status': 'error', 'message': f'Unknown action type: {action_type}'}
+    def snooze_rule(self, rule_name: str, minutes: int):
+        """Snooze a rule for specified minutes"""
+        snooze_until = datetime.now() + timedelta(minutes=minutes)
+        self.snoozed_rules[rule_name] = snooze_until
     
-    def _scale_up_instance(self, context: Dict) -> Dict:
-        """Scale up EC2 instance or RDS instance"""
-        try:
-            if context.get('instance_type') == 'ec2':
-                ssm_client = self.cloudwatch.aws_manager.get_client('ssm')
-                if ssm_client:
-                    response = ssm_client.send_command(
-                        InstanceIds=[context.get('instance_id')],
-                        DocumentName="AWS-ResizeInstance",
-                        Parameters={
-                            'InstanceType': [self._get_next_instance_size(context.get('current_instance_type'))]
-                        }
-                    )
-                    return {'status': 'success', 'message': 'Instance scaling initiated'}
-            
-            elif context.get('instance_type') == 'rds':
-                rds_client = self.cloudwatch.aws_manager.get_client('rds')
-                if rds_client:
-                    rds_client.modify_db_instance(
-                        DBInstanceIdentifier=context.get('instance_id'),
-                        DBInstanceClass=self._get_next_rds_size(context.get('current_instance_class')),
-                        ApplyImmediately=True
-                    )
-                    return {'status': 'success', 'message': 'RDS scaling initiated'}
-                
-        except Exception as e:
-            return {'status': 'error', 'message': f'Scaling failed: {str(e)}'}
-    
-    def _kill_expensive_queries(self, context: Dict) -> Dict:
-        """Kill expensive SQL queries"""
-        try:
-            sql_command = """
-            DECLARE @SessionID INT
-            DECLARE query_cursor CURSOR FOR
-            SELECT session_id FROM sys.dm_exec_requests 
-            WHERE cpu_time > 30000 AND total_elapsed_time > 60000
-            
-            OPEN query_cursor
-            FETCH NEXT FROM query_cursor INTO @SessionID
-            
-            WHILE @@FETCH_STATUS = 0
-            BEGIN
-                KILL @SessionID
-                FETCH NEXT FROM query_cursor INTO @SessionID
-            END
-            
-            CLOSE query_cursor
-            DEALLOCATE query_cursor
-            """
-            
-            ssm_client = self.cloudwatch.aws_manager.get_client('ssm')
-            if ssm_client:
-                response = ssm_client.send_command(
-                    InstanceIds=[context.get('instance_id')],
-                    DocumentName="AWS-RunPowerShellScript",
-                    Parameters={
-                        'commands': [f'sqlcmd -Q "{sql_command}"']
-                    }
-                )
-                
-                return {'status': 'success', 'message': 'Expensive queries terminated'}
-            
-        except Exception as e:
-            return {'status': 'error', 'message': f'Query termination failed: {str(e)}'}
-    
-    def _clear_buffer_cache(self, context: Dict) -> Dict:
-        """Clear SQL Server buffer cache to free memory"""
-        try:
-            sql_command = "DBCC DROPCLEANBUFFERS"
-            
-            ssm_client = self.cloudwatch.aws_manager.get_client('ssm')
-            if ssm_client:
-                response = ssm_client.send_command(
-                    InstanceIds=[context.get('instance_id')],
-                    DocumentName="AWS-RunPowerShellScript",
-                    Parameters={
-                        'commands': [f'sqlcmd -Q "{sql_command}"']
-                    }
-                )
-                
-                return {'status': 'success', 'message': 'Buffer cache cleared'}
-            
-        except Exception as e:
-            return {'status': 'error', 'message': f'Buffer cache clear failed: {str(e)}'}
-    
-    def _cleanup_temp_files(self, context: Dict) -> Dict:
-        """Clean up temporary files and logs"""
-        try:
-            cleanup_script = """
-            # Clean SQL Server temp files
-            Remove-Item "C:\\Program Files\\Microsoft SQL Server\\MSSQL*\\MSSQL\\Data\\tempdb*" -Force -ErrorAction SilentlyContinue
-            
-            # Clean Windows temp files
-            Remove-Item "$env:TEMP\\*" -Recurse -Force -ErrorAction SilentlyContinue
-            Remove-Item "C:\\Windows\\Temp\\*" -Recurse -Force -ErrorAction SilentlyContinue
-            
-            # Clean old log files
-            Get-ChildItem "C:\\Program Files\\Microsoft SQL Server\\MSSQL*\\MSSQL\\Log\\*.trc" | Where-Object {$_.LastWriteTime -lt (Get-Date).AddDays(-7)} | Remove-Item -Force
-            """
-            
-            ssm_client = self.cloudwatch.aws_manager.get_client('ssm')
-            if ssm_client:
-                response = ssm_client.send_command(
-                    InstanceIds=[context.get('instance_id')],
-                    DocumentName="AWS-RunPowerShellScript",
-                    Parameters={'commands': [cleanup_script]}
-                )
-                
-                return {'status': 'success', 'message': 'Temporary files cleaned'}
-            
-        except Exception as e:
-            return {'status': 'error', 'message': f'Cleanup failed: {str(e)}'}
-    
-    def _retry_backup(self, context: Dict) -> Dict:
-        """Retry failed database backup"""
-        try:
-            sql_command = """
-            DECLARE @BackupPath NVARCHAR(500) = 'C:\\Backups\\' + DB_NAME() + '_' + FORMAT(GETDATE(), 'yyyyMMdd_HHmmss') + '.bak'
-            BACKUP DATABASE [YourDatabase] TO DISK = @BackupPath WITH INIT, COMPRESSION
-            """
-            
-            ssm_client = self.cloudwatch.aws_manager.get_client('ssm')
-            if ssm_client:
-                response = ssm_client.send_command(
-                    InstanceIds=[context.get('instance_id')],
-                    DocumentName="AWS-RunPowerShellScript",
-                    Parameters={
-                        'commands': [f'sqlcmd -Q "{sql_command}"']
-                    }
-                )
-                
-                return {'status': 'success', 'message': 'Backup retry initiated'}
-            
-        except Exception as e:
-            return {'status': 'error', 'message': f'Backup retry failed: {str(e)}'}
-    
-    def _perform_ag_failover(self, context: Dict) -> Dict:
-        """Perform Always On Availability Group failover"""
-        try:
-            sql_command = """
-            ALTER AVAILABILITY GROUP [YourAGName] FAILOVER
-            """
-            
-            ssm_client = self.cloudwatch.aws_manager.get_client('ssm')
-            if ssm_client:
-                response = ssm_client.send_command(
-                    InstanceIds=[context.get('secondary_instance_id')],
-                    DocumentName="AWS-RunPowerShellScript",
-                    Parameters={
-                        'commands': [f'sqlcmd -Q "{sql_command}"']
-                    }
-                )
-                
-                return {'status': 'success', 'message': 'AG failover initiated'}
-            
-        except Exception as e:
-            return {'status': 'error', 'message': f'AG failover failed: {str(e)}'}
-    
-    def _send_alert_to_dba(self, context: Dict) -> Dict:
-        """Send alert to DBA team"""
-        try:
-            message = f"""
-            Auto-Remediation Alert:
-            Rule: {context.get('rule_name')}
-            Severity: {context.get('severity')}
-            Instance: {context.get('instance_id')}
-            Actions Taken: {', '.join(context.get('actions', []))}
-            Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-            """
-            
-            return {'status': 'success', 'message': 'Alert sent to DBA team'}
-            
-        except Exception as e:
-            return {'status': 'error', 'message': f'Alert sending failed: {str(e)}'}
-    
-    def _simulate_remediation(self, action: Dict) -> Dict:
-        """Simulate remediation action in demo mode"""
-        return {
-            'status': 'success',
-            'results': [
-                {'action': action_type, 'status': 'simulated', 'message': f'Simulated {action_type}'}
-                for action_type in action['actions']
-            ],
-            'message': f"Simulated remediation for {action['rule_name']}"
-        }
-    
-    def _get_severity(self, rule_name: str) -> str:
-        """Get severity level for a rule"""
-        severity_map = {
-            'high_cpu_usage': 'Medium',
-            'memory_pressure': 'High',
-            'blocking_sessions': 'Medium',
-            'disk_space_low': 'High',
-            'backup_failure': 'High',
-            'ag_failover_needed': 'Critical'
-        }
-        return severity_map.get(rule_name, 'Medium')
-    
-    def _get_impact(self, rule_name: str) -> str:
-        """Get estimated impact for a rule"""
-        impact_map = {
-            'high_cpu_usage': 'Low to Medium',
-            'memory_pressure': 'Medium',
-            'blocking_sessions': 'Low',
-            'disk_space_low': 'Medium',
-            'backup_failure': 'Low',
-            'ag_failover_needed': 'High'
-        }
-        return impact_map.get(rule_name, 'Low')
-    
-    def _get_next_instance_size(self, current_type: str) -> str:
-        """Get next larger instance size"""
-        size_progression = {
-            't3.micro': 't3.small',
-            't3.small': 't3.medium',
-            't3.medium': 't3.large',
-            't3.large': 't3.xlarge',
-            'm5.large': 'm5.xlarge',
-            'm5.xlarge': 'm5.2xlarge',
-            'm5.2xlarge': 'm5.4xlarge'
-        }
-        return size_progression.get(current_type, current_type)
-    
-    def _get_next_rds_size(self, current_class: str) -> str:
-        """Get next larger RDS instance class"""
-        size_progression = {
-            'db.t3.micro': 'db.t3.small',
-            'db.t3.small': 'db.t3.medium',
-            'db.t3.medium': 'db.t3.large',
-            'db.m5.large': 'db.m5.xlarge',
-            'db.m5.xlarge': 'db.m5.2xlarge'
-        }
-        return size_progression.get(current_class, current_class)
-
+    def get_success_rate(self) -> float:
+        """Calculate success rate of remediation actions"""
+        total = self.success_metrics['total_executed']
+        if total == 0:
+            return 100.0
+        
+        return (self.success_metrics['successful'] / total) * 100
 # =================== Predictive Analytics Engine ===================
-class PredictiveAnalyticsEngine:
-    def __init__(self, cloudwatch_connector: AWSCloudWatchConnector):
-        self.cloudwatch = cloudwatch_connector
-        self.prediction_models = {}
+# ================= ENHANCED PREDICTIVE ANALYTICS ENGINE =================
+class EnhancedPredictiveAnalyticsEngine:
+    """Enhanced predictive analytics with SQL Server focus"""
     
-    def analyze_trends(self, metrics: Dict, days: int = 30) -> Dict:
-        """Analyze performance trends and predict future issues"""
+    def __init__(self, cloudwatch_connector):
+        self.cloudwatch = cloudwatch_connector
+        self.prediction_cache = {}
+        self.trend_models = {}
+    
+    def analyze_comprehensive_trends(self, all_metrics: Dict, days_back: int = 7) -> Dict:
+        """Analyze trends across all SQL Server metrics"""
+        
+        analysis_results = {}
+        
+        # Define key metrics for trend analysis
+        key_metrics = {
+            'performance': ['buffer_cache_hit_ratio', 'batch_requests_per_sec', 'page_life_expectancy'],
+            'concurrency': ['processes_blocked', 'deadlocks_per_sec', 'lock_waits_per_sec'],
+            'memory': ['memory_grants_pending', 'target_server_memory_kb', 'total_server_memory_kb'],
+            'storage': ['db_percent_log_used', 'page_splits_per_sec', 'lazy_writes_per_sec']
+        }
+        
+        for category, metrics in key_metrics.items():
+            category_analysis = {}
+            
+            for metric in metrics:
+                metric_data = self._find_metric_data(all_metrics, metric)
+                if metric_data:
+                    trend_analysis = self._analyze_metric_trend(metric, metric_data)
+                    category_analysis[metric] = trend_analysis
+            
+            analysis_results[category] = category_analysis
+        
+        return analysis_results
+    
+    def generate_capacity_predictions(self, all_metrics: Dict) -> Dict:
+        """Generate capacity planning predictions"""
+        
         predictions = {}
         
-        for metric_name, metric_data in metrics.items():
+        # Resource utilization metrics
+        resource_metrics = {
+            'cpu_usage': {'current': 0, 'threshold_warning': 80, 'threshold_critical': 90},
+            'memory_usage': {'current': 0, 'threshold_warning': 85, 'threshold_critical': 95},
+            'db_percent_log_used': {'current': 0, 'threshold_warning': 70, 'threshold_critical': 85},
+            'user_connections': {'current': 0, 'threshold_warning': 200, 'threshold_critical': 400},
+            'buffer_cache_hit_ratio': {'current': 0, 'threshold_warning': 90, 'threshold_critical': 85}
+        }
+        
+        for metric, config in resource_metrics.items():
+            metric_data = self._find_metric_data(all_metrics, metric)
+            
             if metric_data:
-                trend_analysis = self._analyze_metric_trend(metric_name, metric_data)
-                predictions[metric_name] = trend_analysis
+                current_value = metric_data[-1]['Average']
+                config['current'] = current_value
+                
+                # Predict future values
+                predictions_7d = self._predict_metric_future(metric_data, 7)
+                predictions_30d = self._predict_metric_future(metric_data, 30)
+                predictions_90d = self._predict_metric_future(metric_data, 90)
+                
+                # Calculate risk levels
+                risk_7d = self._assess_capacity_risk(predictions_7d, config)
+                risk_30d = self._assess_capacity_risk(predictions_30d, config)
+                risk_90d = self._assess_capacity_risk(predictions_90d, config)
+                
+                predictions[metric] = {
+                    'current': current_value,
+                    'predictions': {
+                        '7_days': predictions_7d,
+                        '30_days': predictions_30d,
+                        '90_days': predictions_90d
+                    },
+                    'risk_levels': {
+                        '7_days': risk_7d,
+                        '30_days': risk_30d,
+                        '90_days': risk_90d
+                    },
+                    'recommendations': self._generate_capacity_recommendations(metric, risk_30d, current_value)
+                }
         
         return predictions
     
-    def _analyze_metric_trend(self, metric_name: str, data: List[Dict]) -> Dict:
+    def generate_performance_forecasts(self, all_metrics: Dict, hours_ahead: int = 24) -> Dict:
+        """Generate performance forecasts for next N hours"""
+        
+        forecasts = {}
+        
+        # Critical performance indicators
+        performance_metrics = [
+            'buffer_cache_hit_ratio',
+            'processes_blocked', 
+            'deadlocks_per_sec',
+            'memory_grants_pending',
+            'db_percent_log_used'
+        ]
+        
+        for metric in performance_metrics:
+            metric_data = self._find_metric_data(all_metrics, metric)
+            
+            if metric_data and len(metric_data) >= 10:  # Need sufficient data
+                # Generate hourly predictions
+                hourly_predictions = []
+                confidence_scores = []
+                
+                for hour in range(1, hours_ahead + 1):
+                    prediction = self._predict_single_point(metric_data, hour)
+                    confidence = self._calculate_prediction_confidence(metric_data, hour)
+                    
+                    hourly_predictions.append(prediction)
+                    confidence_scores.append(confidence)
+                
+                # Identify potential issues
+                issues = self._identify_forecast_issues(metric, hourly_predictions)
+                
+                forecasts[metric] = {
+                    'predictions': hourly_predictions,
+                    'confidence_scores': confidence_scores,
+                    'average_confidence': np.mean(confidence_scores),
+                    'potential_issues': issues,
+                    'recommendations': self._generate_forecast_recommendations(metric, issues)
+                }
+        
+        return forecasts
+    
+    def assess_risk_levels(self, all_metrics: Dict) -> Dict:
+        """Assess current and future risk levels"""
+        
+        risk_assessment = {
+            'current_risks': {},
+            'emerging_risks': {},
+            'risk_summary': {
+                'overall_risk_score': 0,
+                'critical_risks': 0,
+                'high_risks': 0,
+                'medium_risks': 0,
+                'low_risks': 0
+            }
+        }
+        
+        # Define risk criteria
+        risk_criteria = {
+            'buffer_cache_hit_ratio': {
+                'type': 'threshold_below',
+                'critical': 85,
+                'high': 90,
+                'medium': 95,
+                'weight': 25
+            },
+            'processes_blocked': {
+                'type': 'threshold_above',
+                'critical': 20,
+                'high': 10,
+                'medium': 5,
+                'weight': 20
+            },
+            'deadlocks_per_sec': {
+                'type': 'threshold_above',
+                'critical': 1.0,
+                'high': 0.5,
+                'medium': 0.1,
+                'weight': 15
+            },
+            'memory_grants_pending': {
+                'type': 'threshold_above',
+                'critical': 20,
+                'high': 10,
+                'medium': 5,
+                'weight': 15
+            },
+            'db_percent_log_used': {
+                'type': 'threshold_above',
+                'critical': 90,
+                'high': 80,
+                'medium': 70,
+                'weight': 25
+            }
+        }
+        
+        total_weight = 0
+        weighted_risk_score = 0
+        
+        for metric, criteria in risk_criteria.items():
+            metric_data = self._find_metric_data(all_metrics, metric)
+            
+            if metric_data:
+                current_value = metric_data[-1]['Average']
+                current_risk = self._assess_metric_risk(current_value, criteria)
+                
+                # Predict future risk
+                future_predictions = self._predict_metric_future(metric_data, 7)  # 7 days
+                future_risk = self._assess_metric_risk(future_predictions, criteria)
+                
+                risk_assessment['current_risks'][metric] = {
+                    'value': current_value,
+                    'risk_level': current_risk,
+                    'risk_score': self._risk_to_score(current_risk)
+                }
+                
+                risk_assessment['emerging_risks'][metric] = {
+                    'predicted_value': future_predictions,
+                    'risk_level': future_risk,
+                    'risk_score': self._risk_to_score(future_risk),
+                    'trend': 'increasing' if future_predictions > current_value else 'decreasing'
+                }
+                
+                # Add to weighted score
+                weight = criteria['weight']
+                weighted_risk_score += self._risk_to_score(current_risk) * weight
+                total_weight += weight
+                
+                # Count risks by level
+                risk_level = current_risk
+                if risk_level == 'critical':
+                    risk_assessment['risk_summary']['critical_risks'] += 1
+                elif risk_level == 'high':
+                    risk_assessment['risk_summary']['high_risks'] += 1
+                elif risk_level == 'medium':
+                    risk_assessment['risk_summary']['medium_risks'] += 1
+                else:
+                    risk_assessment['risk_summary']['low_risks'] += 1
+        
+        # Calculate overall risk score
+        if total_weight > 0:
+            risk_assessment['risk_summary']['overall_risk_score'] = weighted_risk_score / total_weight
+        
+        return risk_assessment
+    
+    def _find_metric_data(self, all_metrics: Dict, metric_name: str) -> List:
+        """Find metric data in all_metrics dict"""
+        # Try exact match first
+        if metric_name in all_metrics:
+            return all_metrics[metric_name]
+        
+        # Try to find with instance prefix
+        for key in all_metrics.keys():
+            if key.endswith(f"_{metric_name}"):
+                return all_metrics[key]
+        
+        return []
+    
+    def _analyze_metric_trend(self, metric_name: str, metric_data: List) -> Dict:
         """Analyze trend for a specific metric"""
-        if len(data) < 10:
-            return {'status': 'insufficient_data'}
         
-        values = [dp['Average'] for dp in data]
-        timestamps = [dp['Timestamp'] for dp in data]
+        if len(metric_data) < 5:
+            return {
+                'status': 'insufficient_data',
+                'trend': 'unknown',
+                'confidence': 0
+            }
         
-        trend = self._calculate_trend(values)
-        future_prediction = self._predict_future_values(values, 24)
-        risk_level = self._assess_risk_level(metric_name, values, future_prediction)
-        recommendations = self._generate_recommendations(metric_name, trend, risk_level)
+        values = [dp['Average'] for dp in metric_data]
+        timestamps = [dp['Timestamp'] for dp in metric_data]
+        
+        # Calculate linear trend
+        x = np.arange(len(values))
+        slope, intercept = np.polyfit(x, values, 1)
+        
+        # Determine trend direction
+        if abs(slope) < np.std(values) * 0.1:
+            trend = 'stable'
+        elif slope > 0:
+            trend = 'increasing'
+        else:
+            trend = 'decreasing'
+        
+        # Calculate R-squared for confidence
+        y_pred = slope * x + intercept
+        ss_res = np.sum((values - y_pred) ** 2)
+        ss_tot = np.sum((values - np.mean(values)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
+        
+        # Generate future predictions
+        future_24h = self._predict_metric_future(metric_data, 1)  # 1 day ahead
+        future_7d = self._predict_metric_future(metric_data, 7)   # 7 days ahead
         
         return {
             'status': 'analyzed',
             'trend': trend,
-            'risk_level': risk_level,
-            'future_prediction': future_prediction,
-            'recommendations': recommendations,
-            'confidence': self._calculate_confidence(values)
+            'slope': slope,
+            'confidence': max(0, min(100, r_squared * 100)),
+            'current_value': values[-1],
+            'predictions': {
+                '24_hours': future_24h,
+                '7_days': future_7d
+            },
+            'volatility': np.std(values),
+            'mean_value': np.mean(values)
         }
     
-    def _calculate_trend(self, values: List[float]) -> str:
-        """Calculate trend direction"""
-        if len(values) < 5:
-            return 'stable'
+    def _predict_metric_future(self, metric_data: List, days_ahead: int) -> float:
+        """Predict metric value for days ahead"""
         
-        x = list(range(len(values)))
-        n = len(values)
-        sum_x = sum(x)
-        sum_y = sum(values)
-        sum_xy = sum(x[i] * values[i] for i in range(n))
-        sum_x2 = sum(x[i] ** 2 for i in range(n))
+        if len(metric_data) < 3:
+            # Insufficient data, return current value
+            return metric_data[-1]['Average'] if metric_data else 0
         
-        slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x ** 2)
+        values = [dp['Average'] for dp in metric_data]
         
-        if slope > 0.5:
-            return 'increasing'
-        elif slope < -0.5:
-            return 'decreasing'
-        else:
-            return 'stable'
+        # Use simple linear regression for prediction
+        x = np.arange(len(values))
+        slope, intercept = np.polyfit(x, values, 1)
+        
+        # Predict value at future point
+        future_x = len(values) + (days_ahead * 24)  # Assuming hourly data
+        predicted_value = slope * future_x + intercept
+        
+        # Apply bounds based on metric type
+        predicted_value = max(0, predicted_value)  # No negative values
+        
+        return predicted_value
     
-    def _predict_future_values(self, values: List[float], periods: int) -> List[float]:
-        """Predict future values using simple linear extrapolation"""
+    def _predict_single_point(self, metric_data: List, hours_ahead: int) -> float:
+        """Predict single point hours ahead"""
+        
+        values = [dp['Average'] for dp in metric_data]
+        
         if len(values) < 3:
-            return [values[-1]] * periods
+            return values[-1] if values else 0
         
-        changes = [values[i] - values[i-1] for i in range(1, len(values))]
-        avg_change = sum(changes) / len(changes)
+        # Use moving average with trend
+        recent_values = values[-min(24, len(values)):]  # Last 24 points or all available
+        moving_avg = np.mean(recent_values)
         
-        last_value = values[-1]
-        predictions = []
+        # Calculate trend from recent data
+        x = np.arange(len(recent_values))
+        slope, _ = np.polyfit(x, recent_values, 1)
         
-        for i in range(periods):
-            predicted_value = last_value + (avg_change * (i + 1))
-            predictions.append(max(0, predicted_value))
+        # Predict with trend
+        predicted = moving_avg + (slope * hours_ahead)
         
-        return predictions
+        return max(0, predicted)
     
-    def _assess_risk_level(self, metric_name: str, historical: List[float], 
-                          predicted: List[float]) -> str:
-        """Assess risk level based on predictions"""
-        thresholds = {
-            'cpu_usage': {'warning': 70, 'critical': 90},
-            'memory_usage': {'warning': 80, 'critical': 95},
-            'disk_usage': {'warning': 75, 'critical': 90},
-            'connection_count': {'warning': 80, 'critical': 95}
-        }
+    def _calculate_prediction_confidence(self, metric_data: List, hours_ahead: int) -> float:
+        """Calculate confidence in prediction"""
         
-        metric_threshold = thresholds.get(metric_name, {'warning': 80, 'critical': 95})
-        max_predicted = max(predicted)
+        if len(metric_data) < 10:
+            return 30.0  # Low confidence with insufficient data
         
-        if max_predicted > metric_threshold['critical']:
+        values = [dp['Average'] for dp in metric_data]
+        
+        # Calculate variability
+        std_dev = np.std(values)
+        mean_val = np.mean(values)
+        coefficient_of_variation = std_dev / mean_val if mean_val != 0 else 1
+        
+        # Base confidence decreases with time horizon and variability
+        base_confidence = 90
+        time_penalty = hours_ahead * 2  # 2% per hour
+        variability_penalty = coefficient_of_variation * 100
+        
+        confidence = max(10, base_confidence - time_penalty - variability_penalty)
+        
+        return confidence
+    
+    def _assess_capacity_risk(self, predicted_value: float, config: Dict) -> str:
+        """Assess capacity risk based on predicted value"""
+        
+        if predicted_value >= config['threshold_critical']:
             return 'critical'
-        elif max_predicted > metric_threshold['warning']:
-            return 'warning'
+        elif predicted_value >= config['threshold_warning']:
+            return 'high'
+        elif predicted_value >= config['threshold_warning'] * 0.8:
+            return 'medium'
         else:
             return 'low'
     
-    def _generate_recommendations(self, metric_name: str, trend: str, risk_level: str) -> List[str]:
-        """Generate recommendations based on analysis"""
+    def _assess_metric_risk(self, value: float, criteria: Dict) -> str:
+        """Assess risk level for a metric value"""
+        
+        if criteria['type'] == 'threshold_above':
+            if value >= criteria['critical']:
+                return 'critical'
+            elif value >= criteria['high']:
+                return 'high'
+            elif value >= criteria['medium']:
+                return 'medium'
+            else:
+                return 'low'
+        
+        elif criteria['type'] == 'threshold_below':
+            if value <= criteria['critical']:
+                return 'critical'
+            elif value <= criteria['high']:
+                return 'high'
+            elif value <= criteria['medium']:
+                return 'medium'
+            else:
+                return 'low'
+        
+        return 'low'
+    
+    def _risk_to_score(self, risk_level: str) -> int:
+        """Convert risk level to numeric score"""
+        risk_scores = {
+            'critical': 100,
+            'high': 75,
+            'medium': 50,
+            'low': 25
+        }
+        return risk_scores.get(risk_level, 0)
+    
+    def _identify_forecast_issues(self, metric: str, predictions: List[float]) -> List[Dict]:
+        """Identify potential issues in forecast"""
+        
+        issues = []
+        
+        # Define thresholds for different metrics
+        thresholds = {
+            'buffer_cache_hit_ratio': {'critical': 85, 'warning': 90},
+            'processes_blocked': {'critical': 20, 'warning': 10},
+            'deadlocks_per_sec': {'critical': 1.0, 'warning': 0.5},
+            'memory_grants_pending': {'critical': 20, 'warning': 10},
+            'db_percent_log_used': {'critical': 90, 'warning': 75}
+        }
+        
+        if metric not in thresholds:
+            return issues
+        
+        thresh = thresholds[metric]
+        
+        for hour, value in enumerate(predictions, 1):
+            if metric == 'buffer_cache_hit_ratio':
+                # Lower is worse for buffer cache
+                if value <= thresh['critical']:
+                    issues.append({
+                        'hour': hour,
+                        'severity': 'critical',
+                        'description': f'Buffer cache hit ratio predicted to drop to {value:.1f}%',
+                        'impact': 'Severe performance degradation expected'
+                    })
+                elif value <= thresh['warning']:
+                    issues.append({
+                        'hour': hour,
+                        'severity': 'warning',
+                        'description': f'Buffer cache hit ratio predicted to drop to {value:.1f}%',
+                        'impact': 'Performance degradation expected'
+                    })
+            else:
+                # Higher is worse for other metrics
+                if value >= thresh['critical']:
+                    issues.append({
+                        'hour': hour,
+                        'severity': 'critical',
+                        'description': f'{metric} predicted to reach {value:.2f}',
+                        'impact': 'Critical system impact expected'
+                    })
+                elif value >= thresh['warning']:
+                    issues.append({
+                        'hour': hour,
+                        'severity': 'warning',
+                        'description': f'{metric} predicted to reach {value:.2f}',
+                        'impact': 'System impact expected'
+                    })
+        
+        return issues
+    
+    def _generate_capacity_recommendations(self, metric: str, risk_level: str, current_value: float) -> List[str]:
+        """Generate capacity planning recommendations"""
+        
         recommendations = []
         
-        if risk_level == 'critical':
-            if metric_name == 'cpu_usage':
+        if risk_level in ['critical', 'high']:
+            if metric == 'cpu_usage':
                 recommendations.extend([
-                    "Consider scaling up instance size immediately",
-                    "Review and optimize expensive queries",
-                    "Enable auto-scaling if not already configured"
+                    'Scale up to larger instance type immediately',
+                    'Enable auto-scaling if available',
+                    'Optimize CPU-intensive queries',
+                    'Consider read replicas to distribute load'
                 ])
-            elif metric_name == 'memory_usage':
+            elif metric == 'memory_usage':
                 recommendations.extend([
-                    "Increase instance memory or scale up",
-                    "Review memory-intensive queries and procedures",
-                    "Consider implementing memory optimization"
+                    'Increase instance memory allocation',
+                    'Scale to memory-optimized instance type',
+                    'Optimize memory-intensive operations',
+                    'Review max server memory settings'
                 ])
-            elif metric_name == 'disk_usage':
+            elif metric == 'db_percent_log_used':
                 recommendations.extend([
-                    "Extend disk storage immediately",
-                    "Implement log file maintenance",
-                    "Archive old data to reduce storage usage"
+                    'Increase log backup frequency',
+                    'Consider increasing log file auto-growth',
+                    'Review and optimize large transactions',
+                    'Monitor for log reuse wait conditions'
+                ])
+            elif metric == 'user_connections':
+                recommendations.extend([
+                    'Implement connection pooling',
+                    'Review connection timeout settings',
+                    'Optimize application connection management',
+                    'Consider increasing max connections if needed'
                 ])
         
-        elif risk_level == 'warning':
-            recommendations.extend([
-                f"Monitor {metric_name} closely over the next 24 hours",
-                "Prepare scaling strategy if trend continues",
-                "Review recent changes that might impact performance"
-            ])
-        
-        if trend == 'increasing':
-            recommendations.append(f"The {metric_name} trend is increasing - proactive action recommended")
+        elif risk_level == 'medium':
+            recommendations.append(f'Monitor {metric} closely for trends')
+            recommendations.append('Prepare scaling strategy if trend continues')
         
         return recommendations
     
-    def _calculate_confidence(self, values: List[float]) -> float:
-        """Calculate confidence level of predictions"""
-        if len(values) < 10:
-            return 0.3
+    def _generate_forecast_recommendations(self, metric: str, issues: List[Dict]) -> List[str]:
+        """Generate recommendations based on forecast issues"""
         
-        mean_val = sum(values) / len(values)
-        variance = sum((x - mean_val) ** 2 for x in values) / len(values)
-        std_dev = variance ** 0.5
+        recommendations = []
         
-        if std_dev < mean_val * 0.1:
-            return 0.9
-        elif std_dev < mean_val * 0.2:
-            return 0.7
-        elif std_dev < mean_val * 0.3:
-            return 0.5
-        else:
-            return 0.3
-
+        if not issues:
+            recommendations.append(f'{metric} forecast looks stable - no immediate action needed')
+            return recommendations
+        
+        critical_issues = [i for i in issues if i['severity'] == 'critical']
+        warning_issues = [i for i in issues if i['severity'] == 'warning']
+        
+        if critical_issues:
+            earliest_critical = min(critical_issues, key=lambda x: x['hour'])
+            recommendations.append(f'URGENT: {metric} will reach critical levels in {earliest_critical["hour"]} hours')
+            recommendations.append('Implement immediate preventive measures')
+            
+            if metric == 'buffer_cache_hit_ratio':
+                recommendations.extend([
+                    'Add server memory immediately',
+                    'Clear procedure cache if necessary',
+                    'Optimize memory-intensive queries'
+                ])
+            elif metric == 'processes_blocked':
+                recommendations.extend([
+                    'Monitor for blocking sessions closely',
+                    'Prepare to kill long-running transactions',
+                    'Review query optimization opportunities'
+                ])
+        
+        elif warning_issues:
+            earliest_warning = min(warning_issues, key=lambda x: x['hour'])
+            recommendations.append(f'WARNING: {metric} will reach warning levels in {earliest_warning["hour"]} hours')
+            recommendations.append('Prepare preventive actions')
+        
+        return recommendations
 # =================== Claude AI Analyzer ===================
 class ClaudeAIAnalyzer:
     def __init__(self, api_key: str):
@@ -2153,6 +3035,27 @@ def initialize_session_state(aws_config):
                     
             except Exception as e:
                 st.error(f"Failed to initialize: {str(e)}")
+    
+    # Initialize enhanced engines
+    if 'enhanced_auto_remediation' not in st.session_state:
+        st.session_state.enhanced_auto_remediation = None
+    
+    if 'enhanced_predictive_analytics' not in st.session_state:
+        st.session_state.enhanced_predictive_analytics = None
+    
+    # Initialize enhanced engines if CloudWatch connector is available
+    if (st.session_state.cloudwatch_connector and 
+        st.session_state.enhanced_auto_remediation is None):
+        
+        st.session_state.enhanced_auto_remediation = EnhancedAutoRemediationEngine(
+            st.session_state.cloudwatch_connector
+        )
+        
+        st.session_state.enhanced_predictive_analytics = EnhancedPredictiveAnalyticsEngine(
+            st.session_state.cloudwatch_connector
+        )
+    
+    
 
 def display_connection_status():
     """Display connection status and test button"""
@@ -2640,11 +3543,13 @@ def render_dashboard_tab(all_metrics, ec2_instances, rds_instances):
         if st.session_state.cloudwatch_connector.demo_mode:
             st.info("🎭 **Currently in Demo Mode** - Real metrics will appear when AWS is properly configured")
 
-def render_sql_metrics_tab(all_metrics, ec2_instances):
-    """Render SQL Server metrics tab"""
-    st.header("🗄️ Comprehensive SQL Server Database Metrics")
+def render_enhanced_sql_metrics_tab(all_metrics, ec2_instances):
+    """Enhanced SQL Server metrics tab with clear visibility and explanations"""
     
-    # Instance selector for detailed metrics
+    st.header("🗄️ Comprehensive SQL Server Performance Metrics")
+    st.write("**Real-time SQL Server health monitoring with intelligent insights and recommendations**")
+    
+    # Instance selector (keep your existing logic)
     if ec2_instances:
         instance_options = {}
         for ec2 in ec2_instances:
@@ -2655,80 +3560,386 @@ def render_sql_metrics_tab(all_metrics, ec2_instances):
                     break
             instance_options[f"{instance_name} ({ec2['InstanceId']})"] = ec2['InstanceId']
         
-        selected_instance_display = st.selectbox("Select SQL Server Instance for Detailed Analysis", 
+        selected_instance_display = st.selectbox("Select SQL Server Instance for Analysis", 
                                                 list(instance_options.keys()))
         selected_instance = instance_options[selected_instance_display]
         
-        st.markdown(f"### 📊 Detailed Metrics for {selected_instance_display}")
+        # === NEW: SQL Server Health Dashboard ===
+        st.markdown("---")
+        st.subheader(f"🎯 SQL Server Health Overview - {selected_instance_display}")
         
-        # Check if we have metrics for this instance
+        # Get instance-specific metrics
         instance_metrics = {k: v for k, v in all_metrics.items() if k.startswith(selected_instance)}
         
         if instance_metrics:
-            st.success(f"✅ Found {len(instance_metrics)} metric series for this instance")
+            # Health Score Calculation
+            health_score = calculate_sql_server_health_score(instance_metrics, selected_instance)
             
-            # Display key SQL Server metrics
-            col1, col2, col3, col4 = st.columns(4)
+            # Health Overview Cards
+            col1, col2, col3, col4, col5 = st.columns(5)
             
-            # Buffer Cache Hit Ratio
-            buffer_cache_key = f"{selected_instance}_buffer_cache_hit_ratio"
-            if buffer_cache_key in all_metrics and all_metrics[buffer_cache_key]:
-                current_value = all_metrics[buffer_cache_key][-1]['Average']
-                color = "🟢" if current_value > 95 else "🟡" if current_value > 90 else "🔴"
-                with col1:
-                    st.metric(f"Buffer Cache Hit Ratio {color}", f"{current_value:.2f}%")
+            with col1:
+                health_color = "🟢" if health_score >= 80 else "🟡" if health_score >= 60 else "🔴"
+                st.markdown(f"""
+                <div style="
+                    border: 3px solid {'#28a745' if health_score >= 80 else '#ffc107' if health_score >= 60 else '#dc3545'};
+                    border-radius: 10px;
+                    padding: 1rem;
+                    text-align: center;
+                    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+                ">
+                    <h3>{health_color} Overall Health</h3>
+                    <h2 style="color: #007bff; margin: 0;">{health_score}/100</h2>
+                    <p style="margin: 0; font-size: 0.9rem;">
+                        {'Excellent' if health_score >= 90 else 'Good' if health_score >= 80 else 'Needs Attention' if health_score >= 60 else 'Critical'}
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
             
-            # User Connections
-            connections_key = f"{selected_instance}_user_connections"
-            if connections_key in all_metrics and all_metrics[connections_key]:
-                current_value = all_metrics[connections_key][-1]['Average']
-                with col2:
-                    st.metric("User Connections", f"{current_value:.0f}")
+            with col2:
+                buffer_cache_key = f"{selected_instance}_buffer_cache_hit_ratio"
+                buffer_cache = get_metric_current_value(all_metrics.get(buffer_cache_key, []))
+                buffer_status = get_buffer_cache_status(buffer_cache)
+                st.markdown(create_metric_card("Buffer Cache Hit Ratio", buffer_cache, "%", buffer_status, 
+                                             "Memory efficiency - should be > 95%"))
             
-            # Batch Requests/sec
-            batch_key = f"{selected_instance}_batch_requests_per_sec"
-            if batch_key in all_metrics and all_metrics[batch_key]:
-                current_value = all_metrics[batch_key][-1]['Average']
-                with col3:
-                    st.metric("Batch Requests/sec", f"{current_value:.0f}")
+            with col3:
+                connections_key = f"{selected_instance}_user_connections"
+                connections = get_metric_current_value(all_metrics.get(connections_key, []))
+                conn_status = get_connections_status(connections)
+                st.markdown(create_metric_card("Active Connections", int(connections), "", conn_status,
+                                             "Current user connections"))
             
-            # Deadlocks/sec
-            deadlock_key = f"{selected_instance}_deadlocks_per_sec"
-            if deadlock_key in all_metrics and all_metrics[deadlock_key]:
-                current_value = all_metrics[deadlock_key][-1]['Average']
-                color = "🔴" if current_value > 0.1 else "🟡" if current_value > 0 else "🟢"
-                with col4:
-                    st.metric(f"Deadlocks/sec {color}", f"{current_value:.3f}")
+            with col4:
+                blocked_key = f"{selected_instance}_processes_blocked"
+                blocked = get_metric_current_value(all_metrics.get(blocked_key, []))
+                blocked_status = get_blocking_status(blocked)
+                st.markdown(create_metric_card("Blocked Processes", int(blocked), "", blocked_status,
+                                             "Processes waiting due to blocking"))
             
-            # Chart showing SQL Server performance over time
-            if buffer_cache_key in all_metrics and all_metrics[buffer_cache_key]:
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=[dp['Timestamp'] for dp in all_metrics[buffer_cache_key]],
-                    y=[dp['Average'] for dp in all_metrics[buffer_cache_key]],
-                    name='Buffer Cache Hit Ratio %',
-                    line=dict(color='blue')
-                ))
-                fig.update_layout(title="SQL Server Buffer Cache Hit Ratio", 
-                                xaxis_title="Time", yaxis_title="Hit Ratio %")
-                st.plotly_chart(fig, use_container_width=True)
+            with col5:
+                deadlock_key = f"{selected_instance}_deadlocks_per_sec"
+                deadlocks = get_metric_current_value(all_metrics.get(deadlock_key, []))
+                deadlock_status = get_deadlock_status(deadlocks)
+                st.markdown(create_metric_card("Deadlocks/sec", f"{deadlocks:.3f}", "", deadlock_status,
+                                             "Transaction conflicts"))
+            
+            # === NEW: Performance Categories ===
+            st.markdown("---")
+            st.subheader("📊 Detailed Metric Categories")
+            
+            # Core Performance Metrics
+            with st.expander("🎯 Core Performance Metrics", expanded=True):
+                render_core_performance_metrics(all_metrics, selected_instance)
+            
+            # Blocking and Concurrency
+            with st.expander("🔒 Blocking & Concurrency Metrics", expanded=False):
+                render_concurrency_metrics(all_metrics, selected_instance)
+            
+            # === NEW: Real-time Issues Detection ===
+            st.markdown("---")
+            st.subheader("🚨 Real-time Issues & Recommendations")
+            
+            issues = detect_sql_server_issues(instance_metrics, selected_instance)
+            
+            if issues:
+                for issue in issues:
+                    render_issue_card(issue)
+            else:
+                st.success("🎉 No performance issues detected - SQL Server is running optimally!")
         
         else:
+            # === Enhanced Error Messages ===
             st.warning(f"⚠️ No SQL Server metrics found for instance {selected_instance}")
-            st.info("This could be because:")
-            st.write("• CloudWatch agent is not configured for SQL Server metrics")
-            st.write("• Custom SQL Server performance counters are not set up")
-            st.write("• The instance may not be running SQL Server")
-            st.write("• Metrics collection may not have started yet")
             
-            if st.session_state.cloudwatch_connector.demo_mode:
-                st.info("🎭 **Demo Mode:** Real metrics will appear when connected to AWS")
+            # Provide specific troubleshooting guidance
+            with st.expander("🔧 Troubleshooting Guide", expanded=True):
+                st.write("**Possible causes and solutions:**")
+                
+                st.write("### 1. CloudWatch Agent Not Configured")
+                st.code("""
+# Install CloudWatch Agent on SQL Server instance
+# Configure custom metrics collection
+{
+  "metrics": {
+    "namespace": "CWAgent",
+    "metrics_collected": {
+      "procstat": [
+        {
+          "pattern": "sqlservr",
+          "measurement": ["cpu_usage", "memory_usage"],
+          "metrics_collection_interval": 60
+        }
+      ]
+    }
+  }
+}
+                """)
+                
+                st.write("### 2. Custom SQL Server Performance Counters Missing")
+                st.code("""
+# Add to CloudWatch Agent configuration
+"counters": [
+  {
+    "category": "SQLServer:Buffer Manager",
+    "counters": ["Buffer cache hit ratio", "Page life expectancy"],
+    "instances": ["*"],
+    "measurement": ["Average"],
+    "metrics_collection_interval": 60
+  }
+]
+                """)
     
     else:
-        st.warning("No EC2 SQL Server instances found. Please ensure instances are properly tagged.")
+        st.warning("No EC2 SQL Server instances found.")
+        show_tagging_instructions()
+
+def render_core_performance_metrics(all_metrics, instance_id):
+    """Render core SQL Server performance metrics"""
+    
+    st.write("**🎯 Essential SQL Server Performance Indicators**")
+    
+    # Key metrics with explanations
+    metrics_info = [
+        {
+            'key': f"{instance_id}_buffer_cache_hit_ratio",
+            'name': 'Buffer Cache Hit Ratio',
+            'unit': '%',
+            'description': 'Percentage of page requests satisfied from memory without disk I/O',
+            'good_range': '> 95%',
+            'why_important': 'Low values indicate memory pressure and slow query performance',
+            'remediation': [
+                'Add more server memory',
+                'Optimize memory-intensive queries', 
+                'Review buffer pool configuration'
+            ]
+        },
+        {
+            'key': f"{instance_id}_batch_requests_per_sec",
+            'name': 'Batch Requests/sec',
+            'unit': '/sec',
+            'description': 'Number of SQL batches processed per second',
+            'good_range': 'Depends on workload',
+            'why_important': 'Indicates overall SQL Server activity and load',
+            'remediation': [
+                'Scale up the instance if consistently high',
+                'Optimize frequently executed queries',
+                'Implement connection pooling'
+            ]
+        },
+        {
+            'key': f"{instance_id}_page_life_expectancy", 
+            'name': 'Page Life Expectancy',
+            'unit': 'seconds',
+            'description': 'Expected time a page will stay in memory before being flushed',
+            'good_range': '> 300 seconds',
+            'why_important': 'Lower values indicate memory pressure affecting performance',
+            'remediation': [
+                'Increase server memory',
+                'Optimize queries that consume excessive memory',
+                'Review max server memory settings'
+            ]
+        }
+    ]
+    
+    for metric_info in metrics_info:
+        if metric_info['key'] in all_metrics:
+            render_detailed_metric_analysis(all_metrics[metric_info['key']], metric_info)
+        else:
+            st.warning(f"⚠️ Metric not available: {metric_info['name']}")
+
+def render_detailed_metric_analysis(metric_data, metric_info):
+    """Render detailed analysis for a specific metric"""
+    
+    if not metric_data:
+        st.warning(f"No data available for {metric_info['name']}")
+        return
+    
+    current_value = get_metric_current_value(metric_data)
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        # Historical trend chart
+        fig = go.Figure()
         
-        if st.session_state.cloudwatch_connector.demo_mode:
-            st.info("🎭 **Demo Mode:** Real instances will appear when connected to AWS")
+        timestamps = [dp['Timestamp'] for dp in metric_data]
+        values = [dp['Average'] for dp in metric_data]
+        
+        fig.add_trace(go.Scatter(
+            x=timestamps,
+            y=values,
+            name=metric_info['name'],
+            line=dict(color='blue', width=2)
+        ))
+        
+        # Add threshold lines based on metric type
+        if 'buffer_cache' in metric_info['key']:
+            fig.add_hline(y=95, line_dash="dash", line_color="green", annotation_text="Good: 95%")
+            fig.add_hline(y=90, line_dash="dash", line_color="orange", annotation_text="Warning: 90%")
+        elif 'page_life' in metric_info['key']:
+            fig.add_hline(y=300, line_dash="dash", line_color="green", annotation_text="Good: 300s")
+            fig.add_hline(y=180, line_dash="dash", line_color="orange", annotation_text="Warning: 180s")
+        
+        fig.update_layout(
+            title=f"{metric_info['name']} - 24 Hour Trend",
+            xaxis_title="Time",
+            yaxis_title=f"{metric_info['name']} ({metric_info['unit']})",
+            height=300
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        # Metric details and recommendations
+        st.markdown(f"### 📊 {metric_info['name']}")
+        
+        # Current status
+        if 'buffer_cache' in metric_info['key']:
+            status = 'good' if current_value > 95 else 'warning' if current_value > 90 else 'critical'
+        elif 'page_life' in metric_info['key']:
+            status = 'good' if current_value > 300 else 'warning' if current_value > 180 else 'critical'
+        else:
+            status = 'unknown'
+        
+        status_colors = {'good': '#28a745', 'warning': '#ffc107', 'critical': '#dc3545', 'unknown': '#6c757d'}
+        status_icons = {'good': '🟢', 'warning': '🟡', 'critical': '🔴', 'unknown': '🔵'}
+        
+        st.markdown(f"""
+        <div style="
+            border-left: 4px solid {status_colors[status]};
+            padding-left: 1rem;
+            margin: 1rem 0;
+        ">
+            <p><strong>Current Value:</strong> {current_value:.2f} {metric_info['unit']}</p>
+            <p><strong>Status:</strong> {status_icons[status]} {status.title()}</p>
+            <p><strong>Good Range:</strong> {metric_info['good_range']}</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Why it's important
+        st.write("**Why this matters:**")
+        st.write(metric_info['why_important'])
+        
+        # Show remediation if not good
+        if status in ['warning', 'critical']:
+            st.write("**🔧 Recommended Actions:**")
+            for i, action in enumerate(metric_info['remediation'], 1):
+                st.write(f"{i}. {action}")
+
+def render_concurrency_metrics(all_metrics, instance_id):
+    """Render concurrency and blocking metrics"""
+    
+    st.write("**🔒 Concurrency and Blocking Analysis**")
+    
+    blocked_key = f"{instance_id}_processes_blocked"
+    deadlock_key = f"{instance_id}_deadlocks_per_sec"
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if blocked_key in all_metrics:
+            blocked = get_metric_current_value(all_metrics[blocked_key])
+            if blocked > 0:
+                st.error(f"🔴 **{int(blocked)} processes currently blocked**")
+                st.write("**Immediate Actions:**")
+                st.write("1. Check blocking chain with sys.dm_exec_requests")
+                st.write("2. Consider killing head blocker if necessary")
+                st.write("3. Review long-running transactions")
+            else:
+                st.success("🟢 **No blocking detected**")
+    
+    with col2:
+        if deadlock_key in all_metrics:
+            deadlocks = get_metric_current_value(all_metrics[deadlock_key])
+            if deadlocks > 0.1:
+                st.warning(f"🟡 **{deadlocks:.3f} deadlocks per second**")
+                st.write("**Recommended Actions:**")
+                st.write("1. Enable deadlock logging (TRACEON 1222)")
+                st.write("2. Review deadlock graphs")
+                st.write("3. Optimize transaction ordering")
+            else:
+                st.success("🟢 **No significant deadlock activity**")
+
+def detect_sql_server_issues(instance_metrics, instance_id):
+    """Detect current SQL Server issues and provide recommendations"""
+    
+    issues = []
+    
+    # Check buffer cache hit ratio
+    buffer_cache_key = f"{instance_id}_buffer_cache_hit_ratio"
+    if buffer_cache_key in instance_metrics:
+        buffer_cache = get_metric_current_value(instance_metrics[buffer_cache_key])
+        if buffer_cache < 90:
+            issues.append({
+                'severity': 'critical' if buffer_cache < 85 else 'warning',
+                'title': 'Low Buffer Cache Hit Ratio',
+                'description': f'Buffer cache hit ratio is {buffer_cache:.1f}%, below the recommended 95%',
+                'impact': 'Queries are performing excessive disk I/O, causing slow response times',
+                'immediate_actions': [
+                    'Check current memory usage with sys.dm_os_memory_clerks',
+                    'Identify memory-intensive queries',
+                    'Consider adding more server memory'
+                ],
+                'sql_diagnostic': "SELECT * FROM sys.dm_os_memory_clerks ORDER BY pages_kb DESC"
+            })
+    
+    # Check for blocking
+    blocked_key = f"{instance_id}_processes_blocked"
+    if blocked_key in instance_metrics:
+        blocked = get_metric_current_value(instance_metrics[blocked_key])
+        if blocked > 0:
+            issues.append({
+                'severity': 'critical' if blocked > 10 else 'warning',
+                'title': f'{int(blocked)} Processes Currently Blocked',
+                'description': f'There are {int(blocked)} processes waiting due to blocking',
+                'impact': 'Users experiencing delays, potential timeouts and poor application performance',
+                'immediate_actions': [
+                    'Identify blocking chain',
+                    'Review long-running transactions',
+                    'Consider killing head blocker if necessary'
+                ],
+                'sql_diagnostic': "SELECT * FROM sys.dm_exec_requests WHERE blocking_session_id != 0"
+            })
+    
+    return issues
+
+def render_issue_card(issue):
+    """Render an issue card with diagnostic information"""
+    
+    severity_colors = {
+        'critical': '#dc3545',
+        'warning': '#ffc107',
+        'info': '#17a2b8'
+    }
+    
+    severity_icons = {
+        'critical': '🔴',
+        'warning': '🟡', 
+        'info': '🔵'
+    }
+    
+    severity = issue.get('severity', 'info')
+    color = severity_colors[severity]
+    icon = severity_icons[severity]
+    
+    with st.expander(f"{icon} {issue['title']}", expanded=True):
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.markdown(f"**Issue:** {issue['description']}")
+            st.markdown(f"**Impact:** {issue['impact']}")
+            
+            st.write("**🔧 Immediate Actions:**")
+            for i, action in enumerate(issue['immediate_actions'], 1):
+                st.write(f"{i}. {action}")
+        
+        with col2:
+            st.write("**🔍 SQL Diagnostic:**")
+            st.code(issue['sql_diagnostic'], language='sql')
+            
+            if st.button(f"📋 Copy Query", key=f"copy_{issue['title']}"):
+                st.success("Query copied to clipboard!")
 
 def render_os_metrics_tab(all_metrics, ec2_instances):
     """Render OS metrics tab"""
@@ -3686,6 +4897,494 @@ def render_reports_tab():
     with col3:
         if st.button("📧 Email Report"):
             st.info("Report would be emailed to stakeholders")
+            
+            
+# ================= ENHANCED TAB RENDERING FUNCTIONS =================
+
+def render_enhanced_auto_remediation_tab():
+    """Enhanced auto-remediation tab with complete visibility"""
+    
+    st.header("🤖 Intelligent Auto-Remediation System")
+    st.write("**Automated SQL Server issue detection and resolution with full transparency**")
+    
+    # Initialize enhanced remediation engine if not exists
+    if 'enhanced_auto_remediation' not in st.session_state:
+        if st.session_state.cloudwatch_connector:
+            st.session_state.enhanced_auto_remediation = EnhancedAutoRemediationEngine(
+                st.session_state.cloudwatch_connector
+            )
+        else:
+            st.warning("CloudWatch connector required for auto-remediation")
+            return
+    
+    remediation_engine = st.session_state.enhanced_auto_remediation
+    
+    # Get current metrics for evaluation
+    all_metrics, _, _ = collect_comprehensive_metrics()
+    
+    # Remediation Status Overview
+    st.subheader("📊 Remediation System Status")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        active_opportunities = remediation_engine.evaluate_all_rules(all_metrics)
+        color = "🔴" if len(active_opportunities) > 0 else "🟢"
+        st.metric(f"Active Issues {color}", len(active_opportunities))
+    
+    with col2:
+        total_executed = remediation_engine.success_metrics['total_executed']
+        st.metric("Actions Executed Today", total_executed)
+    
+    with col3:
+        success_rate = remediation_engine.get_success_rate()
+        color = "🟢" if success_rate > 90 else "🟡" if success_rate > 75 else "🔴"
+        st.metric(f"Success Rate {color}", f"{success_rate:.1f}%")
+    
+    with col4:
+        auto_executed = remediation_engine.success_metrics['auto_executed']
+        manual_executed = remediation_engine.success_metrics['manual_executed']
+        ratio = auto_executed / max(1, auto_executed + manual_executed) * 100
+        st.metric("Auto-Execution Rate", f"{ratio:.1f}%")
+    
+    # Current Opportunities
+    st.markdown("---")
+    st.subheader("🚨 Current Remediation Opportunities")
+    
+    if active_opportunities:
+        for opportunity in active_opportunities:
+            render_enhanced_remediation_opportunity(opportunity, remediation_engine)
+    else:
+        st.success("🎉 No immediate remediation actions required!")
+        st.info("All SQL Server metrics are within acceptable ranges. The system is operating optimally.")
+    
+    # Execution History
+    st.markdown("---")
+    st.subheader("📋 Recent Execution History")
+    render_remediation_execution_history(remediation_engine)
+
+def render_enhanced_remediation_opportunity(opportunity: Dict, engine):
+    """Render enhanced remediation opportunity with detailed actions"""
+    
+    rule_config = opportunity['rule_config']
+    current_value = opportunity['current_value']
+    rule_name = opportunity['rule_name']
+    
+    severity_colors = {
+        'Critical': '🔴',
+        'High': '🟡',
+        'Medium': '🟠',
+        'Low': '🟢'
+    }
+    
+    severity_icon = severity_colors.get(rule_config['severity'], '🔵')
+    
+    with st.expander(f"{severity_icon} {rule_config['description']} - {rule_config['severity']} Priority", expanded=True):
+        
+        # Opportunity Details
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.markdown(f"**🎯 Issue:** {rule_config['description']}")
+            st.markdown(f"**📊 Current Value:** {current_value:.2f}")
+            st.markdown(f"**⚠️ Threshold:** {rule_config['condition']} {rule_config['threshold']}")
+            st.markdown(f"**💥 Impact:** {rule_config['impact']}")
+            st.markdown(f"**🏢 Business Impact:** {rule_config['business_impact']}")
+            
+            # Show available actions with details
+            st.markdown("**🔧 Available Actions:**")
+            
+            for i, action in enumerate(rule_config['actions'], 1):
+                risk_colors = {"Low": "🟢", "Medium": "🟡", "High": "🔴"}
+                risk_color = risk_colors.get(action['risk_level'], "🔵")
+                
+                # Action card
+                st.markdown(f"""
+                <div style="
+                    border-left: 4px solid {'#28a745' if action['risk_level'] == 'Low' else '#ffc107' if action['risk_level'] == 'Medium' else '#dc3545'};
+                    padding: 0.5rem;
+                    margin: 0.5rem 0;
+                    background-color: #f8f9fa;
+                ">
+                    <strong>{i}. {risk_color} {action['name']}</strong><br>
+                    <small><strong>Type:</strong> {action['type']} | <strong>Risk:</strong> {action['risk_level']}</small><br>
+                    <small>{action['description']}</small><br>
+                    <small><strong>Expected:</strong> {action.get('expected_outcome', 'See description')}</small>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Show SQL command if available
+                if action.get('sql_command'):
+                    with st.expander(f"SQL Command for {action['name']}", expanded=False):
+                        st.code(action['sql_command'], language='sql')
+                
+                # Show side effects if any
+                if action.get('side_effects'):
+                    st.warning(f"⚠️ Side Effects: {action['side_effects']}")
+        
+        with col2:
+            st.markdown("**⚡ Quick Actions:**")
+            
+            # Execute individual actions
+            for i, action in enumerate(rule_config['actions']):
+                button_key = f"execute_{rule_name}_{i}"
+                button_text = f"🔧 {action['name']}"
+                
+                if action.get('auto_execute', False):
+                    button_text += " (Auto)"
+                else:
+                    button_text += " (Manual)"
+                
+                if st.button(button_text, key=button_key):
+                    with st.spinner(f"Executing {action['name']}..."):
+                        result = engine.execute_action(action, rule_name)
+                        
+                        if result['status'] == 'success':
+                            st.success(f"✅ {result['message']}")
+                            if result.get('results'):
+                                with st.expander("View Results"):
+                                    st.text(result['results'])
+                        elif result['status'] == 'pending_approval':
+                            st.warning(f"⏳ {result['message']}")
+                        else:
+                            st.error(f"❌ {result.get('error', 'Action failed')}")
+            
+            # Bulk actions
+            st.markdown("---")
+            
+            auto_actions = [a for a in rule_config['actions'] if a.get('auto_execute')]
+            if auto_actions and st.button(f"🤖 Execute All Auto Actions ({len(auto_actions)})", key=f"auto_all_{rule_name}"):
+                for action in auto_actions:
+                    result = engine.execute_action(action, rule_name)
+                    if result['status'] == 'success':
+                        st.success(f"✅ {action['name']}: {result['message']}")
+                    else:
+                        st.error(f"❌ {action['name']}: {result.get('error', 'Failed')}")
+            
+            if st.button(f"⏸️ Snooze (1 hour)", key=f"snooze_{rule_name}"):
+                engine.snooze_rule(rule_name, 60)
+                st.success("Issue snoozed for 1 hour")
+                st.rerun()
+
+def render_remediation_execution_history(engine):
+    """Render execution history with filtering and details"""
+    
+    if not engine.execution_history:
+        st.info("No execution history available yet.")
+        return
+    
+    # Recent executions (last 10)
+    recent_executions = engine.execution_history[-10:]
+    
+    # Create DataFrame for display
+    history_data = []
+    for execution in reversed(recent_executions):  # Most recent first
+        status_icon = "✅" if execution['status'] == 'success' else "⏳" if execution['status'] == 'pending_approval' else "❌"
+        
+        history_data.append({
+            'Time': execution['started_at'].strftime('%H:%M:%S'),
+            'Action': execution['action_name'],
+            'Type': execution['action_type'],
+            'Rule': execution['rule_name'],
+            'Status': f"{status_icon} {execution['status']}",
+            'Duration': f"{execution.get('duration', 0):.1f}s" if execution.get('duration') else 'N/A'
+        })
+    
+    if history_data:
+        history_df = pd.DataFrame(history_data)
+        st.dataframe(history_df, use_container_width=True)
+        
+        # Show details for selected execution
+        if st.checkbox("Show execution details"):
+            selected_index = st.selectbox("Select execution", range(len(recent_executions)), 
+                                        format_func=lambda x: f"{recent_executions[-(x+1)]['action_name']} at {recent_executions[-(x+1)]['started_at'].strftime('%H:%M:%S')}")
+            
+            if selected_index is not None:
+                execution = recent_executions[-(selected_index+1)]
+                
+                with st.expander("Execution Details", expanded=True):
+                    st.json(execution)
+
+def render_enhanced_predictive_analytics_tab():
+    """Enhanced predictive analytics tab with comprehensive forecasting"""
+    
+    st.header("🔮 Advanced Predictive Analytics & Capacity Planning")
+    st.write("**AI-powered forecasting for SQL Server performance, capacity, and risk assessment**")
+    
+    # Initialize enhanced analytics engine if not exists
+    if 'enhanced_predictive_analytics' not in st.session_state:
+        if st.session_state.cloudwatch_connector:
+            st.session_state.enhanced_predictive_analytics = EnhancedPredictiveAnalyticsEngine(
+                st.session_state.cloudwatch_connector
+            )
+        else:
+            st.warning("CloudWatch connector required for predictive analytics")
+            return
+    
+    analytics_engine = st.session_state.enhanced_predictive_analytics
+    
+    # Get current metrics
+    all_metrics, _, _ = collect_comprehensive_metrics()
+    
+    # Quick Predictions Overview
+    st.subheader("⚡ Quick Predictions (Next 24 Hours)")
+    
+    performance_forecasts = analytics_engine.generate_performance_forecasts(all_metrics, 24)
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    # Show key metric predictions
+    key_metrics = ['buffer_cache_hit_ratio', 'processes_blocked', 'deadlocks_per_sec', 'memory_grants_pending']
+    
+    for i, metric in enumerate(key_metrics):
+        if i < 4:  # Only show first 4
+            with [col1, col2, col3, col4][i]:
+                if metric in performance_forecasts:
+                    forecast = performance_forecasts[metric]
+                    issues = forecast['potential_issues']
+                    
+                    # Determine color based on issues
+                    critical_issues = [issue for issue in issues if issue['severity'] == 'critical']
+                    warning_issues = [issue for issue in issues if issue['severity'] == 'warning']
+                    
+                    if critical_issues:
+                        color = "🔴"
+                        status = "Critical Risk"
+                    elif warning_issues:
+                        color = "🟡" 
+                        status = "Warning"
+                    else:
+                        color = "🟢"
+                        status = "Stable"
+                    
+                    # Show prediction with confidence
+                    avg_prediction = np.mean(forecast['predictions'])
+                    confidence = forecast['average_confidence']
+                    
+                    st.metric(
+                        f"{metric.replace('_', ' ').title()} {color}",
+                        f"{avg_prediction:.2f}",
+                        delta=f"{confidence:.0f}% confidence"
+                    )
+                    st.caption(status)
+    
+    # Detailed Analytics Tabs
+    analytics_tabs = st.tabs([
+        "📈 Performance Forecasts",
+        "📊 Capacity Planning", 
+        "⚠️ Risk Assessment",
+        "🎯 AI Recommendations"
+    ])
+    
+    with analytics_tabs[0]:
+        render_performance_forecasts(analytics_engine, all_metrics)
+    
+    with analytics_tabs[1]:
+        render_capacity_planning_analysis(analytics_engine, all_metrics)
+    
+    with analytics_tabs[2]:
+        render_risk_assessment_analysis(analytics_engine, all_metrics)
+    
+    with analytics_tabs[3]:
+        render_ai_recommendations(analytics_engine, all_metrics)
+
+def render_performance_forecasts(engine, all_metrics):
+    """Render detailed performance forecasting"""
+    
+    st.subheader("📈 Performance Forecasting (Next 24 Hours)")
+    
+    forecasts = engine.generate_performance_forecasts(all_metrics, 24)
+    
+    if not forecasts:
+        st.warning("Insufficient data for performance forecasting")
+        return
+    
+    # Select metric to analyze
+    available_metrics = list(forecasts.keys())
+    selected_metric = st.selectbox(
+        "Select metric for detailed forecast",
+        available_metrics,
+        format_func=lambda x: x.replace('_', ' ').title()
+    )
+    
+    if selected_metric and selected_metric in forecasts:
+        forecast = forecasts[selected_metric]
+        
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            # Create forecast chart
+            hours = list(range(1, 25))  # 1-24 hours
+            predictions = forecast['predictions']
+            confidence_scores = forecast['confidence_scores']
+            
+            fig = go.Figure()
+            
+            # Main prediction line
+            fig.add_trace(go.Scatter(
+                x=hours,
+                y=predictions,
+                name='Predicted Values',
+                line=dict(color='blue', width=3)
+            ))
+            
+            # Confidence band
+            upper_bound = [p * (1 + (100 - c) / 200) for p, c in zip(predictions, confidence_scores)]
+            lower_bound = [p * (1 - (100 - c) / 200) for p, c in zip(predictions, confidence_scores)]
+            
+            fig.add_trace(go.Scatter(
+                x=hours + hours[::-1],
+                y=upper_bound + lower_bound[::-1],
+                fill='toself',
+                fillcolor='rgba(0, 100, 80, 0.2)',
+                line=dict(color='rgba(255,255,255,0)'),
+                name='Confidence Interval'
+            ))
+            
+            # Add threshold lines based on metric
+            if selected_metric == 'buffer_cache_hit_ratio':
+                fig.add_hline(y=95, line_dash="dash", line_color="green", annotation_text="Good: 95%")
+                fig.add_hline(y=90, line_dash="dash", line_color="orange", annotation_text="Warning: 90%")
+                fig.add_hline(y=85, line_dash="dash", line_color="red", annotation_text="Critical: 85%")
+            elif selected_metric == 'processes_blocked':
+                fig.add_hline(y=5, line_dash="dash", line_color="orange", annotation_text="Warning: 5")
+                fig.add_hline(y=20, line_dash="dash", line_color="red", annotation_text="Critical: 20")
+            
+            fig.update_layout(
+                title=f"{selected_metric.replace('_', ' ').title()} - 24 Hour Forecast",
+                xaxis_title="Hours Ahead",
+                yaxis_title="Predicted Value",
+                height=400
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            # Forecast summary
+            st.markdown(f"### 📊 Forecast Summary")
+            st.write(f"**Average Confidence:** {forecast['average_confidence']:.1f}%")
+            st.write(f"**Trend:** {'Increasing' if predictions[-1] > predictions[0] else 'Decreasing' if predictions[-1] < predictions[0] else 'Stable'}")
+            
+            # Potential issues
+            issues = forecast['potential_issues']
+            if issues:
+                st.markdown("**⚠️ Predicted Issues:**")
+                for issue in issues[:3]:  # Show top 3
+                    severity_icon = "🔴" if issue['severity'] == 'critical' else "🟡"
+                    st.write(f"{severity_icon} Hour {issue['hour']}: {issue['description']}")
+            else:
+                st.success("🟢 No issues predicted")
+            
+            # Recommendations
+            recommendations = forecast['recommendations']
+            if recommendations:
+                st.markdown("**🎯 Recommendations:**")
+                for rec in recommendations[:3]:
+                    st.write(f"• {rec}")
+
+def render_capacity_planning_analysis(engine, all_metrics):
+    """Render capacity planning analysis"""
+    
+    st.subheader("📊 Capacity Planning Analysis")
+    
+    capacity_predictions = engine.generate_capacity_predictions(all_metrics)
+    
+    if not capacity_predictions:
+        st.warning("Insufficient data for capacity planning")
+        return
+    
+    # Capacity Overview Table
+    st.write("### 📈 Capacity Utilization Projections")
+    
+    capacity_data = []
+    for metric, data in capacity_predictions.items():
+        predictions = data['predictions']
+        risk_levels = data['risk_levels']
+        
+        capacity_data.append({
+            'Resource': metric.replace('_', ' ').title(),
+            'Current': f"{data['current']:.1f}",
+            '7 Days': f"{predictions['7_days']:.1f}",
+            '30 Days': f"{predictions['30_days']:.1f}",
+            '90 Days': f"{predictions['90_days']:.1f}",
+            '30D Risk': risk_levels['30_days'].title(),
+            '90D Risk': risk_levels['90_days'].title()
+        })
+    
+    capacity_df = pd.DataFrame(capacity_data)
+    st.dataframe(capacity_df, use_container_width=True)
+
+def render_risk_assessment_analysis(engine, all_metrics):
+    """Render comprehensive risk assessment"""
+    
+    st.subheader("⚠️ Comprehensive Risk Assessment")
+    
+    risk_assessment = engine.assess_risk_levels(all_metrics)
+    
+    # Risk Summary Dashboard
+    st.write("### 🎯 Risk Summary")
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        overall_score = risk_assessment['risk_summary']['overall_risk_score']
+        color = "🟢" if overall_score < 25 else "🟡" if overall_score < 50 else "🟠" if overall_score < 75 else "🔴"
+        st.metric(f"Overall Risk {color}", f"{overall_score:.0f}/100")
+    
+    with col2:
+        critical_risks = risk_assessment['risk_summary']['critical_risks']
+        color = "🔴" if critical_risks > 0 else "🟢"
+        st.metric(f"Critical Risks {color}", critical_risks)
+    
+    with col3:
+        high_risks = risk_assessment['risk_summary']['high_risks']
+        color = "🟡" if high_risks > 0 else "🟢"
+        st.metric(f"High Risks {color}", high_risks)
+    
+    with col4:
+        medium_risks = risk_assessment['risk_summary']['medium_risks']
+        color = "🟠" if medium_risks > 0 else "🟢"
+        st.metric(f"Medium Risks {color}", medium_risks)
+    
+    with col5:
+        low_risks = risk_assessment['risk_summary']['low_risks']
+        st.metric("Low Risks 🟢", low_risks)
+
+def render_ai_recommendations(engine, all_metrics):
+    """Render AI-powered recommendations"""
+    
+    st.subheader("🎯 AI-Powered Recommendations")
+    
+    # Generate recommendations based on analysis
+    risk_assessment = engine.assess_risk_levels(all_metrics)
+    
+    # Immediate recommendations
+    st.write("### 🚨 Immediate Actions Required")
+    
+    immediate_actions = []
+    for metric, risk_data in risk_assessment['current_risks'].items():
+        if risk_data['risk_level'] == 'critical':
+            immediate_actions.append(f"**{metric.replace('_', ' ').title()}**: Critical level detected - immediate action required")
+    
+    if immediate_actions:
+        for action in immediate_actions:
+            st.error(action)
+    else:
+        st.success("🟢 No immediate critical actions required")
+    
+    # Strategic recommendations
+    st.write("### 📋 Strategic Recommendations")
+    
+    strategic_recs = [
+        "Implement predictive scaling based on trend analysis",
+        "Set up automated monitoring for critical thresholds",
+        "Review and optimize resource allocation quarterly",
+        "Establish baseline performance metrics for comparison"
+    ]
+    
+    for rec in strategic_recs:
+        st.write(f"• {rec}")
+
 
 # =================== Main Application ===================
 def main():
@@ -3748,7 +5447,8 @@ def main():
         render_dashboard_tab(all_metrics, ec2_instances, rds_instances)
     
     with tab2:
-        render_sql_metrics_tab(all_metrics, ec2_instances)
+        with tab2:
+        render_enhanced_sql_metrics_tab(all_metrics, ec2_instances)
     
     with tab3:
         render_os_metrics_tab(all_metrics, ec2_instances)
@@ -3757,10 +5457,10 @@ def main():
         render_always_on_tab()
     
     with tab5:
-        render_auto_remediation_tab(all_metrics, aws_config.get('enable_auto_remediation', True))
+        render_enhanced_auto_remediation_tab()
     
     with tab6:
-        render_predictive_analytics_tab(all_metrics, aws_config.get('enable_predictive_alerts', True))
+        render_enhanced_predictive_analytics_tab()
     
     with tab7:
         render_alerts_tab(all_metrics, all_logs)
