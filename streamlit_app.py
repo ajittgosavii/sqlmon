@@ -951,12 +951,140 @@ def test_log_groups(log_groups):
             st.error(f'{result["status"]} **{result["log_group"]}** - {result["message"]}')
     
    # =================== AWS CloudWatch Integration ===================
-class SQLServerMetricsCollector:
-    """Collects comprehensive SQL Server metrics from CloudWatch and AWS services."""
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any
+import logging
+import numpy as np
+from botocore.exceptions import ClientError
+
+logger = logging.getLogger(__name__)
+
+
+class AWSCloudWatchConnector:
+    """AWS CloudWatch connector for SQL Server monitoring and metrics collection."""
     
-    def __init__(self, aws_manager, demo_mode: bool = False):
-        self.aws_manager = aws_manager
-        self.demo_mode = demo_mode
+    def __init__(self, aws_config: Dict):
+        """Initialize AWS CloudWatch connections using the manager."""
+        self.aws_config = aws_config
+        self.aws_manager = get_aws_manager()
+        self.aws_manager.initialize_aws_connection(aws_config)
+        self.demo_mode = self.aws_manager.demo_mode
+    
+    # ==================== CONNECTION MANAGEMENT ====================
+    
+    def test_connection(self) -> bool:
+        """Test AWS connection."""
+        return self.aws_manager.test_connection()
+    
+    def get_connection_status(self) -> Dict:
+        """Get connection status."""
+        return self.aws_manager.get_connection_status()
+    
+    def get_account_info(self) -> Dict[str, str]:
+        """Get AWS account information."""
+        if self.demo_mode:
+            return self._get_demo_account_info()
+        
+        try:
+            sts_client = self.aws_manager.get_client('sts')
+            if not sts_client:
+                return {}
+            
+            identity = sts_client.get_caller_identity()
+            account_id = identity['Account']
+            
+            # Try to get account alias
+            account_alias = self._get_account_alias()
+            
+            return {
+                'account_id': account_id,
+                'account_alias': account_alias,
+                'region': self.aws_config.get('region'),
+                'user_arn': identity.get('Arn', 'Unknown'),
+                'environment': self.aws_config.get('account_name', 'Unknown')
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get account information: {str(e)}")
+            return {}
+    
+    def _get_account_alias(self) -> str:
+        """Get AWS account alias."""
+        try:
+            iam_client = self.aws_manager.aws_session.client('iam')
+            aliases = iam_client.list_account_aliases()
+            return aliases['AccountAliases'][0] if aliases['AccountAliases'] else 'No alias'
+        except Exception:
+            return 'Unknown'
+    
+    def _get_demo_account_info(self) -> Dict[str, str]:
+        """Get demo account information."""
+        return {
+            'account_id': '123456789012',
+            'account_alias': 'demo-sql-environment',
+            'region': self.aws_config.get('region', 'us-east-2'),
+            'vpc_id': 'vpc-1234567890abcdef0',
+            'environment': 'demo'
+        }
+    
+    # ==================== CLOUDWATCH METRICS ====================
+    
+    def get_cloudwatch_metrics(
+        self, 
+        metric_queries: List[Dict], 
+        start_time: datetime, 
+        end_time: datetime
+    ) -> Dict[str, List]:
+        """Get CloudWatch metrics with enhanced error handling."""
+        if self.demo_mode:
+            return self._generate_demo_cloudwatch_data(metric_queries)
+        
+        try:
+            cloudwatch_client = self.aws_manager.get_client('cloudwatch')
+            if not cloudwatch_client:
+                logger.warning("CloudWatch client not available")
+                return {}
+            
+            results = {}
+            for query in metric_queries:
+                results[query['key']] = self._fetch_single_metric(
+                    cloudwatch_client, query, start_time, end_time
+                )
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Failed to retrieve CloudWatch metrics: {str(e)}")
+            return {}
+    
+    def _fetch_single_metric(
+        self, 
+        client, 
+        query: Dict, 
+        start_time: datetime, 
+        end_time: datetime
+    ) -> List[Dict]:
+        """Fetch a single metric from CloudWatch."""
+        try:
+            response = client.get_metric_statistics(
+                Namespace=query['namespace'],
+                MetricName=query['metric_name'],
+                Dimensions=query.get('dimensions', []),
+                StartTime=start_time,
+                EndTime=end_time,
+                Period=query.get('period', 300),
+                Statistics=query.get('statistics', ['Average'])
+            )
+            return response['Datapoints']
+            
+        except ClientError as e:
+            logger.warning(f"Failed to retrieve metric {query['key']}: {e.response['Error']['Message']}")
+            return []
+        except Exception as e:
+            logger.warning(f"Unexpected error retrieving metric {query['key']}: {str(e)}")
+            return []
+    
+    # ==================== SQL SERVER METRICS ====================
     
     def get_comprehensive_sql_metrics(
         self, 
@@ -964,18 +1092,8 @@ class SQLServerMetricsCollector:
         start_time: datetime, 
         end_time: datetime
     ) -> Dict[str, List]:
-        """
-        Get comprehensive SQL Server metrics from CloudWatch.
-        
-        Args:
-            instance_id: The instance identifier
-            start_time: Start time for metric collection
-            end_time: End time for metric collection
-            
-        Returns:
-            Dictionary containing metric data organized by category
-        """
-        metrics_config = self._build_metrics_configuration()
+        """Get comprehensive SQL Server metrics from CloudWatch."""
+        metrics_config = self._build_sql_metrics_configuration()
         
         # Add instance dimension to all metrics
         for metric in metrics_config:
@@ -983,7 +1101,7 @@ class SQLServerMetricsCollector:
         
         return self.get_cloudwatch_metrics(metrics_config, start_time, end_time)
     
-    def _build_metrics_configuration(self) -> List[Dict[str, str]]:
+    def _build_sql_metrics_configuration(self) -> List[Dict[str, str]]:
         """Build comprehensive SQL Server metrics configuration."""
         return [
             *self._get_buffer_manager_metrics(),
@@ -1004,395 +1122,251 @@ class SQLServerMetricsCollector:
     def _get_buffer_manager_metrics(self) -> List[Dict[str, str]]:
         """Database engine performance metrics."""
         return [
-            {
-                'key': 'buffer_cache_hit_ratio',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Buffer Manager\\Buffer cache hit ratio'
-            },
-            {
-                'key': 'page_life_expectancy',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Buffer Manager\\Page life expectancy'
-            },
-            {
-                'key': 'lazy_writes_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Buffer Manager\\Lazy writes/sec'
-            },
-            {
-                'key': 'checkpoint_pages_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Buffer Manager\\Checkpoint pages/sec'
-            },
-            {
-                'key': 'free_list_stalls_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Buffer Manager\\Free list stalls/sec'
-            }
+            {'key': 'buffer_cache_hit_ratio', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Buffer Manager\\Buffer cache hit ratio'},
+            {'key': 'page_life_expectancy', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Buffer Manager\\Page life expectancy'},
+            {'key': 'lazy_writes_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Buffer Manager\\Lazy writes/sec'},
+            {'key': 'checkpoint_pages_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Buffer Manager\\Checkpoint pages/sec'},
+            {'key': 'free_list_stalls_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Buffer Manager\\Free list stalls/sec'}
         ]
     
     def _get_sql_activity_metrics(self) -> List[Dict[str, str]]:
         """SQL Server activity and connection metrics."""
         return [
-            {
-                'key': 'batch_requests_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:SQL Statistics\\Batch Requests/sec'
-            },
-            {
-                'key': 'sql_compilations_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:SQL Statistics\\SQL Compilations/sec'
-            },
-            {
-                'key': 'sql_recompilations_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:SQL Statistics\\SQL Re-Compilations/sec'
-            },
-            {
-                'key': 'user_connections',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:General Statistics\\User Connections'
-            },
-            {
-                'key': 'processes_blocked',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:General Statistics\\Processes blocked'
-            },
-            {
-                'key': 'logins_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:General Statistics\\Logins/sec'
-            },
-            {
-                'key': 'logouts_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:General Statistics\\Logouts/sec'
-            }
+            {'key': 'batch_requests_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:SQL Statistics\\Batch Requests/sec'},
+            {'key': 'sql_compilations_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:SQL Statistics\\SQL Compilations/sec'},
+            {'key': 'sql_recompilations_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:SQL Statistics\\SQL Re-Compilations/sec'},
+            {'key': 'user_connections', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:General Statistics\\User Connections'},
+            {'key': 'processes_blocked', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:General Statistics\\Processes blocked'},
+            {'key': 'logins_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:General Statistics\\Logins/sec'},
+            {'key': 'logouts_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:General Statistics\\Logouts/sec'}
         ]
     
     def _get_locking_metrics(self) -> List[Dict[str, str]]:
         """Locking and blocking performance metrics."""
         return [
-            {
-                'key': 'lock_waits_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Locks\\Lock Waits/sec'
-            },
-            {
-                'key': 'lock_wait_time_ms',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Locks\\Average Wait Time (ms)'
-            },
-            {
-                'key': 'lock_timeouts_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Locks\\Lock Timeouts/sec'
-            },
-            {
-                'key': 'deadlocks_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Locks\\Number of Deadlocks/sec'
-            },
-            {
-                'key': 'lock_requests_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Locks\\Lock Requests/sec'
-            }
+            {'key': 'lock_waits_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Locks\\Lock Waits/sec'},
+            {'key': 'lock_wait_time_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Locks\\Average Wait Time (ms)'},
+            {'key': 'lock_timeouts_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Locks\\Lock Timeouts/sec'},
+            {'key': 'deadlocks_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Locks\\Number of Deadlocks/sec'},
+            {'key': 'lock_requests_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Locks\\Lock Requests/sec'}
         ]
     
     def _get_access_methods_metrics(self) -> List[Dict[str, str]]:
         """Data access pattern metrics."""
         return [
-            {
-                'key': 'full_scans_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Access Methods\\Full Scans/sec'
-            },
-            {
-                'key': 'index_searches_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Access Methods\\Index Searches/sec'
-            },
-            {
-                'key': 'page_splits_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Access Methods\\Page Splits/sec'
-            },
-            {
-                'key': 'page_lookups_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Access Methods\\Page lookups/sec'
-            },
-            {
-                'key': 'worktables_created_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Access Methods\\Worktables Created/sec'
-            },
-            {
-                'key': 'workfiles_created_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Access Methods\\Workfiles Created/sec'
-            }
+            {'key': 'full_scans_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Access Methods\\Full Scans/sec'},
+            {'key': 'index_searches_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Access Methods\\Index Searches/sec'},
+            {'key': 'page_splits_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Access Methods\\Page Splits/sec'},
+            {'key': 'page_lookups_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Access Methods\\Page lookups/sec'},
+            {'key': 'worktables_created_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Access Methods\\Worktables Created/sec'},
+            {'key': 'workfiles_created_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Access Methods\\Workfiles Created/sec'}
         ]
     
     def _get_memory_metrics(self) -> List[Dict[str, str]]:
         """Memory management metrics."""
         return [
-            {
-                'key': 'memory_grants_pending',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Memory Manager\\Memory Grants Pending'
-            },
-            {
-                'key': 'memory_grants_outstanding',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Memory Manager\\Memory Grants Outstanding'
-            },
-            {
-                'key': 'target_server_memory_kb',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Memory Manager\\Target Server Memory (KB)'
-            },
-            {
-                'key': 'total_server_memory_kb',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Memory Manager\\Total Server Memory (KB)'
-            }
+            {'key': 'memory_grants_pending', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Memory Manager\\Memory Grants Pending'},
+            {'key': 'memory_grants_outstanding', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Memory Manager\\Memory Grants Outstanding'},
+            {'key': 'target_server_memory_kb', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Memory Manager\\Target Server Memory (KB)'},
+            {'key': 'total_server_memory_kb', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Memory Manager\\Total Server Memory (KB)'}
         ]
     
     def _get_plan_cache_metrics(self) -> List[Dict[str, str]]:
         """Plan cache performance metrics."""
         return [
-            {
-                'key': 'cache_hit_ratio',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Plan Cache\\Cache Hit Ratio'
-            },
-            {
-                'key': 'cache_pages',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Plan Cache\\Cache Pages'
-            },
-            {
-                'key': 'cache_objects_in_use',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Plan Cache\\Cache Objects in use'
-            }
+            {'key': 'cache_hit_ratio', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Plan Cache\\Cache Hit Ratio'},
+            {'key': 'cache_pages', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Plan Cache\\Cache Pages'},
+            {'key': 'cache_objects_in_use', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Plan Cache\\Cache Objects in use'}
         ]
     
     def _get_wait_statistics_metrics(self) -> List[Dict[str, str]]:
         """Wait statistics for performance analysis."""
         return [
-            {
-                'key': 'wait_cxpacket_ms',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Wait Statistics\\CXPACKET waits'
-            },
-            {
-                'key': 'wait_async_network_io_ms',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Wait Statistics\\ASYNC_NETWORK_IO waits'
-            },
-            {
-                'key': 'wait_pageiolatch_sh_ms',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Wait Statistics\\PAGEIOLATCH_SH waits'
-            },
-            {
-                'key': 'wait_pageiolatch_ex_ms',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Wait Statistics\\PAGEIOLATCH_EX waits'
-            },
-            {
-                'key': 'wait_writelog_ms',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Wait Statistics\\WRITELOG waits'
-            },
-            {
-                'key': 'wait_resource_semaphore_ms',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Wait Statistics\\RESOURCE_SEMAPHORE waits'
-            }
+            {'key': 'wait_cxpacket_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Wait Statistics\\CXPACKET waits'},
+            {'key': 'wait_async_network_io_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Wait Statistics\\ASYNC_NETWORK_IO waits'},
+            {'key': 'wait_pageiolatch_sh_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Wait Statistics\\PAGEIOLATCH_SH waits'},
+            {'key': 'wait_pageiolatch_ex_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Wait Statistics\\PAGEIOLATCH_EX waits'},
+            {'key': 'wait_writelog_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Wait Statistics\\WRITELOG waits'},
+            {'key': 'wait_resource_semaphore_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Wait Statistics\\RESOURCE_SEMAPHORE waits'}
         ]
     
     def _get_availability_group_metrics(self) -> List[Dict[str, str]]:
         """Always On Availability Groups metrics."""
         return [
-            {
-                'key': 'ag_data_movement_state',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Availability Groups\\Data Movement State'
-            },
-            {
-                'key': 'ag_synchronization_health',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Availability Groups\\Synchronization Health'
-            },
-            {
-                'key': 'ag_log_send_queue_size',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Database Replica\\Log Send Queue Size'
-            },
-            {
-                'key': 'ag_log_send_rate',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Database Replica\\Log Send Rate'
-            },
-            {
-                'key': 'ag_redo_queue_size',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Database Replica\\Redo Queue Size'
-            },
-            {
-                'key': 'ag_redo_rate',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Database Replica\\Redo Rate'
-            },
-            {
-                'key': 'ag_recovery_lsn',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Database Replica\\Recovery LSN'
-            },
-            {
-                'key': 'ag_truncation_lsn',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Database Replica\\Truncation LSN'
-            }
+            {'key': 'ag_data_movement_state', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Availability Groups\\Data Movement State'},
+            {'key': 'ag_synchronization_health', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Availability Groups\\Synchronization Health'},
+            {'key': 'ag_log_send_queue_size', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Database Replica\\Log Send Queue Size'},
+            {'key': 'ag_log_send_rate', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Database Replica\\Log Send Rate'},
+            {'key': 'ag_redo_queue_size', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Database Replica\\Redo Queue Size'},
+            {'key': 'ag_redo_rate', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Database Replica\\Redo Rate'},
+            {'key': 'ag_recovery_lsn', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Database Replica\\Recovery LSN'},
+            {'key': 'ag_truncation_lsn', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Database Replica\\Truncation LSN'}
         ]
     
     def _get_database_metrics(self) -> List[Dict[str, str]]:
         """Database-specific metrics."""
         return [
-            {
-                'key': 'db_data_file_size_kb',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Databases\\Data File(s) Size (KB)'
-            },
-            {
-                'key': 'db_log_file_size_kb',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Databases\\Log File(s) Size (KB)'
-            },
-            {
-                'key': 'db_log_file_used_size_kb',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Databases\\Log File(s) Used Size (KB)'
-            },
-            {
-                'key': 'db_percent_log_used',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Databases\\Percent Log Used'
-            },
-            {
-                'key': 'db_active_transactions',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Databases\\Active Transactions'
-            },
-            {
-                'key': 'db_transactions_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Databases\\Transactions/sec'
-            },
-            {
-                'key': 'db_log_growths',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Databases\\Log Growths'
-            },
-            {
-                'key': 'db_log_shrinks',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Databases\\Log Shrinks'
-            },
-            {
-                'key': 'db_log_flushes_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Databases\\Log Flushes/sec'
-            },
-            {
-                'key': 'db_log_flush_wait_time',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Databases\\Log Flush Wait Time'
-            }
+            {'key': 'db_data_file_size_kb', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Data File(s) Size (KB)'},
+            {'key': 'db_log_file_size_kb', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Log File(s) Size (KB)'},
+            {'key': 'db_log_file_used_size_kb', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Log File(s) Used Size (KB)'},
+            {'key': 'db_percent_log_used', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Percent Log Used'},
+            {'key': 'db_active_transactions', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Active Transactions'},
+            {'key': 'db_transactions_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Transactions/sec'},
+            {'key': 'db_log_growths', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Log Growths'},
+            {'key': 'db_log_shrinks', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Log Shrinks'},
+            {'key': 'db_log_flushes_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Log Flushes/sec'},
+            {'key': 'db_log_flush_wait_time', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Databases\\Log Flush Wait Time'}
         ]
     
     def _get_tempdb_metrics(self) -> List[Dict[str, str]]:
         """TempDB specific metrics."""
         return [
-            {
-                'key': 'tempdb_version_store_size_kb',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Transactions\\Version Store Size (KB)'
-            },
-            {
-                'key': 'tempdb_version_generation_rate',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Transactions\\Version Generation rate (KB/s)'
-            },
-            {
-                'key': 'tempdb_version_cleanup_rate',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Transactions\\Version Cleanup rate (KB/s)'
-            }
+            {'key': 'tempdb_version_store_size_kb', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Transactions\\Version Store Size (KB)'},
+            {'key': 'tempdb_version_generation_rate', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Transactions\\Version Generation rate (KB/s)'},
+            {'key': 'tempdb_version_cleanup_rate', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Transactions\\Version Cleanup rate (KB/s)'}
         ]
     
     def _get_backup_metrics(self) -> List[Dict[str, str]]:
         """Backup operation metrics."""
         return [
-            {
-                'key': 'backup_throughput_bytes_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Backup Device\\Device Throughput Bytes/sec'
-            }
+            {'key': 'backup_throughput_bytes_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Backup Device\\Device Throughput Bytes/sec'}
         ]
     
     def _get_security_metrics(self) -> List[Dict[str, str]]:
         """Security and authentication metrics."""
         return [
-            {
-                'key': 'failed_logins_per_sec',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:SQL Errors\\Errors/sec'
-            }
+            {'key': 'failed_logins_per_sec', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:SQL Errors\\Errors/sec'}
         ]
     
     def _get_custom_business_metrics(self) -> List[Dict[str, str]]:
         """Custom business and performance metrics."""
         return [
-            {
-                'key': 'query_avg_execution_time_ms',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Custom\\Average Query Execution Time'
-            },
-            {
-                'key': 'expensive_queries_count',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Custom\\Expensive Queries Count'
-            },
-            {
-                'key': 'index_fragmentation_avg',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Custom\\Average Index Fragmentation'
-            },
-            {
-                'key': 'missing_indexes_count',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Custom\\Missing Indexes Count'
-            },
-            {
-                'key': 'unused_indexes_count',
-                'namespace': 'CWAgent',
-                'metric_name': 'SQLServer:Custom\\Unused Indexes Count'
-            }
+            {'key': 'query_avg_execution_time_ms', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Custom\\Average Query Execution Time'},
+            {'key': 'expensive_queries_count', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Custom\\Expensive Queries Count'},
+            {'key': 'index_fragmentation_avg', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Custom\\Average Index Fragmentation'},
+            {'key': 'missing_indexes_count', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Custom\\Missing Indexes Count'},
+            {'key': 'unused_indexes_count', 'namespace': 'CWAgent', 'metric_name': 'SQLServer:Custom\\Unused Indexes Count'}
         ]
     
-    def get_rds_instances(self) -> List[Dict]:
-        """
-        Get RDS SQL Server instances.
+    # ==================== OS METRICS ====================
+    
+    def get_os_metrics(
+        self, 
+        instance_id: str, 
+        start_time: datetime, 
+        end_time: datetime
+    ) -> Dict[str, List]:
+        """Get comprehensive OS-level metrics from CloudWatch Agent."""
+        os_metric_queries = self._build_os_metrics_configuration(instance_id)
+        return self.get_cloudwatch_metrics(os_metric_queries, start_time, end_time)
+    
+    def _build_os_metrics_configuration(self, instance_id: str) -> List[Dict[str, str]]:
+        """Build OS metrics configuration."""
+        metrics = [
+            *self._get_cpu_metrics(),
+            *self._get_memory_os_metrics(),
+            *self._get_disk_metrics(),
+            *self._get_network_metrics(),
+            *self._get_process_metrics(),
+            *self._get_system_load_metrics(),
+            *self._get_windows_specific_metrics()
+        ]
         
-        Returns:
-            List of SQL Server RDS instances
-        """
+        # Add dimensions to all metrics
+        for metric in metrics:
+            metric['dimensions'] = [
+                {'Name': 'InstanceId', 'Value': instance_id},
+                {'Name': 'ImageId', 'Value': 'ami-xxxxx'},
+                {'Name': 'InstanceType', 'Value': 'm5.large'}
+            ]
+        
+        return metrics
+    
+    def _get_cpu_metrics(self) -> List[Dict[str, str]]:
+        """CPU performance metrics."""
+        return [
+            {'key': 'cpu_usage_active', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_active'},
+            {'key': 'cpu_usage_guest', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_guest'},
+            {'key': 'cpu_usage_idle', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_idle'},
+            {'key': 'cpu_usage_iowait', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_iowait'},
+            {'key': 'cpu_usage_steal', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_steal'},
+            {'key': 'cpu_usage_system', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_system'},
+            {'key': 'cpu_usage_user', 'namespace': 'CWAgent', 'metric_name': 'cpu_usage_user'}
+        ]
+    
+    def _get_memory_os_metrics(self) -> List[Dict[str, str]]:
+        """OS memory metrics."""
+        return [
+            {'key': 'mem_used_percent', 'namespace': 'CWAgent', 'metric_name': 'mem_used_percent'},
+            {'key': 'mem_available_percent', 'namespace': 'CWAgent', 'metric_name': 'mem_available_percent'},
+            {'key': 'mem_used', 'namespace': 'CWAgent', 'metric_name': 'mem_used'},
+            {'key': 'mem_cached', 'namespace': 'CWAgent', 'metric_name': 'mem_cached'},
+            {'key': 'mem_buffers', 'namespace': 'CWAgent', 'metric_name': 'mem_buffers'}
+        ]
+    
+    def _get_disk_metrics(self) -> List[Dict[str, str]]:
+        """Disk I/O metrics."""
+        return [
+            {'key': 'disk_used_percent', 'namespace': 'CWAgent', 'metric_name': 'disk_used_percent'},
+            {'key': 'disk_inodes_free', 'namespace': 'CWAgent', 'metric_name': 'disk_inodes_free'},
+            {'key': 'diskio_read_bytes', 'namespace': 'CWAgent', 'metric_name': 'diskio_read_bytes'},
+            {'key': 'diskio_write_bytes', 'namespace': 'CWAgent', 'metric_name': 'diskio_write_bytes'},
+            {'key': 'diskio_reads', 'namespace': 'CWAgent', 'metric_name': 'diskio_reads'},
+            {'key': 'diskio_writes', 'namespace': 'CWAgent', 'metric_name': 'diskio_writes'},
+            {'key': 'diskio_read_time', 'namespace': 'CWAgent', 'metric_name': 'diskio_read_time'},
+            {'key': 'diskio_write_time', 'namespace': 'CWAgent', 'metric_name': 'diskio_write_time'},
+            {'key': 'diskio_io_time', 'namespace': 'CWAgent', 'metric_name': 'diskio_io_time'}
+        ]
+    
+    def _get_network_metrics(self) -> List[Dict[str, str]]:
+        """Network performance metrics."""
+        return [
+            {'key': 'net_bytes_sent', 'namespace': 'CWAgent', 'metric_name': 'net_bytes_sent'},
+            {'key': 'net_bytes_recv', 'namespace': 'CWAgent', 'metric_name': 'net_bytes_recv'},
+            {'key': 'net_packets_sent', 'namespace': 'CWAgent', 'metric_name': 'net_packets_sent'},
+            {'key': 'net_packets_recv', 'namespace': 'CWAgent', 'metric_name': 'net_packets_recv'},
+            {'key': 'net_err_in', 'namespace': 'CWAgent', 'metric_name': 'net_err_in'},
+            {'key': 'net_err_out', 'namespace': 'CWAgent', 'metric_name': 'net_err_out'},
+            {'key': 'net_drop_in', 'namespace': 'CWAgent', 'metric_name': 'net_drop_in'},
+            {'key': 'net_drop_out', 'namespace': 'CWAgent', 'metric_name': 'net_drop_out'}
+        ]
+    
+    def _get_process_metrics(self) -> List[Dict[str, str]]:
+        """Process monitoring metrics."""
+        return [
+            {'key': 'processes_running', 'namespace': 'CWAgent', 'metric_name': 'processes_running'},
+            {'key': 'processes_sleeping', 'namespace': 'CWAgent', 'metric_name': 'processes_sleeping'},
+            {'key': 'processes_stopped', 'namespace': 'CWAgent', 'metric_name': 'processes_stopped'},
+            {'key': 'processes_zombies', 'namespace': 'CWAgent', 'metric_name': 'processes_zombies'},
+            {'key': 'processes_blocked', 'namespace': 'CWAgent', 'metric_name': 'processes_blocked'}
+        ]
+    
+    def _get_system_load_metrics(self) -> List[Dict[str, str]]:
+        """System load metrics."""
+        return [
+            {'key': 'system_load1', 'namespace': 'CWAgent', 'metric_name': 'system_load1'},
+            {'key': 'system_load5', 'namespace': 'CWAgent', 'metric_name': 'system_load5'},
+            {'key': 'system_load15', 'namespace': 'CWAgent', 'metric_name': 'system_load15'}
+        ]
+    
+    def _get_windows_specific_metrics(self) -> List[Dict[str, str]]:
+        """Windows-specific performance counters."""
+        return [
+            {'key': 'LogicalDisk_PercentFreeSpace', 'namespace': 'CWAgent', 'metric_name': 'LogicalDisk % Free Space'},
+            {'key': 'Memory_PercentCommittedBytesInUse', 'namespace': 'CWAgent', 'metric_name': 'Memory % Committed Bytes In Use'},
+            {'key': 'Memory_AvailableMBytes', 'namespace': 'CWAgent', 'metric_name': 'Memory Available MBytes'},
+            {'key': 'Paging_File_PercentUsage', 'namespace': 'CWAgent', 'metric_name': 'Paging File % Usage'},
+            {'key': 'PhysicalDisk_PercentDiskTime', 'namespace': 'CWAgent', 'metric_name': 'PhysicalDisk % Disk Time'},
+            {'key': 'PhysicalDisk_AvgDiskQueueLength', 'namespace': 'CWAgent', 'metric_name': 'PhysicalDisk Avg. Disk Queue Length'},
+            {'key': 'Processor_PercentProcessorTime', 'namespace': 'CWAgent', 'metric_name': 'Processor % Processor Time'},
+            {'key': 'System_ProcessorQueueLength', 'namespace': 'CWAgent', 'metric_name': 'System Processor Queue Length'},
+            {'key': 'TCPv4_ConnectionsEstablished', 'namespace': 'CWAgent', 'metric_name': 'TCPv4 Connections Established'}
+        ]
+    
+    # ==================== AWS INSTANCES ====================
+    
+    def get_rds_instances(self) -> List[Dict]:
+        """Get RDS SQL Server instances."""
         if self.demo_mode:
             return self._get_demo_rds_instances()
         
@@ -1415,34 +1389,8 @@ class SQLServerMetricsCollector:
             logger.error(f"Failed to retrieve RDS instances: {str(e)}")
             return []
     
-    def _get_demo_rds_instances(self) -> List[Dict]:
-        """Get demo RDS instances for testing."""
-        return [
-            {
-                'DBInstanceIdentifier': 'sql-server-prod-1',
-                'Engine': 'sqlserver-ex',
-                'DBInstanceStatus': 'available',
-                'AvailabilityZone': 'us-east-2a',
-                'MultiAZ': False,
-                'AllocatedStorage': 100
-            },
-            {
-                'DBInstanceIdentifier': 'sql-server-prod-2',
-                'Engine': 'sqlserver-se',
-                'DBInstanceStatus': 'available',
-                'AvailabilityZone': 'us-east-2b',
-                'MultiAZ': True,
-                'AllocatedStorage': 500
-            }
-        ]
-    
     def get_ec2_instances(self) -> List[Dict]:
-        """
-        Get all EC2 instances for user selection.
-        
-        Returns:
-            List of EC2 instances (running and stopped)
-        """
+        """Get all EC2 instances for user selection."""
         if self.demo_mode:
             return self._get_demo_ec2_instances()
         
@@ -1467,6 +1415,27 @@ class SQLServerMetricsCollector:
             logger.error(f"Failed to retrieve EC2 instances: {str(e)}")
             return []
     
+    def _get_demo_rds_instances(self) -> List[Dict]:
+        """Get demo RDS instances for testing."""
+        return [
+            {
+                'DBInstanceIdentifier': 'sql-server-prod-1',
+                'Engine': 'sqlserver-ex',
+                'DBInstanceStatus': 'available',
+                'AvailabilityZone': 'us-east-2a',
+                'MultiAZ': False,
+                'AllocatedStorage': 100
+            },
+            {
+                'DBInstanceIdentifier': 'sql-server-prod-2',
+                'Engine': 'sqlserver-se',
+                'DBInstanceStatus': 'available',
+                'AvailabilityZone': 'us-east-2b',
+                'MultiAZ': True,
+                'AllocatedStorage': 500
+            }
+        ]
+    
     def _get_demo_ec2_instances(self) -> List[Dict]:
         """Get demo EC2 instances for testing."""
         return [
@@ -1479,19 +1448,253 @@ class SQLServerMetricsCollector:
             }
         ]
     
-    def get_cloudwatch_metrics(
-        self, 
-        metrics: List[Dict], 
-        start_time: datetime, 
-        end_time: datetime
-    ) -> Dict[str, List]:
-        """
-        Retrieve metrics from CloudWatch.
+    # ==================== CLOUDWATCH LOGS ====================
+    
+    def get_cloudwatch_logs(self, log_group: str, hours: int = 24) -> List[Dict]:
+        """Get CloudWatch logs."""
+        if self.demo_mode:
+            return self._generate_demo_log_data()
         
-        This method should be implemented to interact with CloudWatch API.
-        """
-        # Implementation would depend on your CloudWatch integration
-        raise NotImplementedError("CloudWatch metrics retrieval not implemented")
+        try:
+            logs_client = self.aws_manager.get_client('logs')
+            if not logs_client:
+                logger.warning("CloudWatch Logs client not available")
+                return []
+            
+            start_time = int((datetime.now() - timedelta(hours=hours)).timestamp() * 1000)
+            end_time = int(datetime.now().timestamp() * 1000)
+            
+            response = logs_client.filter_log_events(
+                logGroupName=log_group,
+                startTime=start_time,
+                endTime=end_time
+            )
+            
+            return response['events']
+            
+        except Exception as e:
+            logger.error(f"Failed to retrieve CloudWatch logs: {str(e)}")
+            return []
+    
+    def get_available_log_groups(self) -> List[str]:
+        """Get all available CloudWatch log groups."""
+        if self.demo_mode:
+            return self._get_demo_log_groups()
+        
+        try:
+            logs_client = self.aws_manager.get_client('logs')
+            if not logs_client:
+                logger.warning("CloudWatch Logs client not available")
+                return []
+            
+            response = logs_client.describe_log_groups()
+            log_groups = [log_group['logGroupName'] for log_group in response['logGroups']]
+            
+            logger.info(f"Found {len(log_groups)} log groups")
+            return sorted(log_groups)
+            
+        except Exception as e:
+            logger.error(f"Failed to get log groups: {str(e)}")
+            return []
+    
+    def get_sql_server_logs(
+        self, 
+        log_groups: List[str], 
+        hours: int = 24,
+        filter_pattern: Optional[str] = None
+    ) -> Dict[str, List[Dict]]:
+        """Get SQL Server specific logs from multiple log groups."""
+        if self.demo_mode:
+            return self._generate_demo_sql_logs(log_groups)
+        
+        try:
+            logs_client = self.aws_manager.get_client('logs')
+            if not logs_client:
+                return {}
+            
+            start_time = int((datetime.now() - timedelta(hours=hours)).timestamp() * 1000)
+            end_time = int(datetime.now().timestamp() * 1000)
+            
+            all_logs = {}
+            for log_group in log_groups:
+                all_logs[log_group] = self._fetch_log_group_events(
+                    logs_client, log_group, start_time, end_time, filter_pattern
+                )
+            
+            return all_logs
+            
+        except Exception as e:
+            logger.error(f"Failed to retrieve SQL Server logs: {str(e)}")
+            return {}
+    
+    def _fetch_log_group_events(
+        self, 
+        client, 
+        log_group: str, 
+        start_time: int, 
+        end_time: int,
+        filter_pattern: Optional[str] = None
+    ) -> List[Dict]:
+        """Fetch events from a single log group."""
+        try:
+            params = {
+                'logGroupName': log_group,
+                'startTime': start_time,
+                'endTime': end_time
+            }
+            
+            if filter_pattern:
+                params['filterPattern'] = filter_pattern
+            
+            response = client.filter_log_events(**params)
+            return response['events']
+            
+        except Exception as e:
+            logger.warning(f"Could not retrieve logs from {log_group}: {str(e)}")
+            return []
+    
+    def _get_demo_log_groups(self) -> List[str]:
+        """Get demo log groups."""
+        return [
+            "/aws/ec2/windows/application",
+            "/aws/ec2/windows/system", 
+            "/aws/rds/instance/sql-prod/error",
+            "custom-sql-logs"
+        ]
+    
+    # ==================== DEMO DATA GENERATION ====================
+    
+    def _generate_demo_cloudwatch_data(self, metric_queries: List[Dict]) -> Dict[str, List]:
+        """Generate demo CloudWatch data with realistic SQL Server metrics."""
+        results = {}
+        current_time = datetime.now()
+        
+        for query in metric_queries:
+            datapoints = []
+            for i in range(24):
+                timestamp = current_time - timedelta(hours=i)
+                value = self._generate_metric_value(query['key'])
+                
+                datapoints.append({
+                    'Timestamp': timestamp,
+                    'Average': value,
+                    'Unit': query.get('unit', 'Count')
+                })
+            
+            results[query['key']] = datapoints
+        
+        return results
+    
+    def _generate_metric_value(self, metric_key: str) -> float:
+        """Generate realistic metric values based on metric type."""
+        key = metric_key.lower()
+        
+        metric_ranges = {
+            'cpu': (20, 80),
+            'memory': (60, 90),
+            'buffer_cache_hit_ratio': (95, 99.9),
+            'page_life_expectancy': (300, 3600),
+            'batch_requests_per_sec': (100, 5000),
+            'user_connections': (10, 200),
+            'processes_blocked': (0, 5),
+            'deadlocks_per_sec': (0, 0.5),
+            'lock_waits_per_sec': (0, 100),
+            'lock_wait_time_ms': (0, 1000),
+            'full_scans_per_sec': (0, 50),
+            'index_searches_per_sec': (100, 10000),
+            'page_splits_per_sec': (0, 100),
+            'target_server_memory_kb': (8000000, 16000000),
+            'disk': (40, 70),
+            'connection': (10, 100)
+        }
+        
+        # Find matching range
+        for pattern, (min_val, max_val) in metric_ranges.items():
+            if pattern in key:
+                return np.random.uniform(min_val, max_val)
+        
+        # Default range
+        return np.random.uniform(0, 100)
+    
+    def _generate_demo_log_data(self) -> List[Dict]:
+        """Generate demo log data."""
+        log_messages = [
+            "SQL Server started successfully",
+            "Database backup completed",
+            "Always On availability group health check passed",
+            "High CPU usage detected on instance",
+            "Memory pressure warning",
+            "Deadlock detected between sessions",
+            "Index maintenance completed",
+            "Statistics update finished"
+        ]
+        
+        current_time = datetime.now()
+        log_events = []
+        
+        for i in range(50):
+            timestamp = current_time - timedelta(minutes=i * 30)
+            log_events.append({
+                'timestamp': int(timestamp.timestamp() * 1000),
+                'message': np.random.choice(log_messages),
+                'logStreamName': f'sql-server-{np.random.randint(1, 3)}'
+            })
+        
+        return log_events
+    
+    def _generate_demo_sql_logs(self, log_groups: List[str]) -> Dict[str, List[Dict]]:
+        """Generate demo SQL Server logs for different log group types."""
+        log_patterns = {
+            'error': [
+                "SQL Server error: Login failed for user 'sa'",
+                "Deadlock detected between sessions 52 and 67",
+                "I/O error on backup device",
+                "Transaction log is full",
+                "Memory pressure detected"
+            ],
+            'agent': [
+                "Job 'DatabaseBackup' completed successfully",
+                "Job 'IndexMaintenance' started",
+                "Alert: High CPU utilization",
+                "Maintenance plan execution completed"
+            ],
+            'application': [
+                "Application connected to database",
+                "Query execution completed in 1250ms",
+                "Connection pool exhausted",
+                "Stored procedure execution started"
+            ],
+            'system': [
+                "SQL Server service started",
+                "Database recovery completed",
+                "Checkpoint operation completed",
+                "Always On availability group synchronized"
+            ]
+        }
+        
+        demo_logs = {}
+        current_time = datetime.now()
+        
+        for log_group in log_groups:
+            # Determine log type based on log group name
+            log_type = 'system'
+            for pattern_type in log_patterns.keys():
+                if pattern_type in log_group.lower():
+                    log_type = pattern_type
+                    break
+            
+            events = []
+            for i in range(20):
+                timestamp = current_time - timedelta(minutes=i * 30)
+                events.append({
+                    'timestamp': int(timestamp.timestamp() * 1000),
+                    'message': np.random.choice(log_patterns[log_type]),
+                    'logStreamName': f'sql-server-{np.random.randint(1, 3)}'
+                })
+            
+            demo_logs[log_group] = events
+        
+        return demo_logs
 
 # =================== Always On Availability Groups Monitor ===================
 class AlwaysOnMonitor:
