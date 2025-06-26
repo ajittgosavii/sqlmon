@@ -1960,16 +1960,16 @@ AWS_DEFAULT_REGION=us-east-1
                                         value="Production", 
                                         help="Environment name (e.g., Production, Staging)")
 
+       
         # CloudWatch Configuration
-        # CloudWatch Configuration
-            st.subheader("📊 CloudWatch Configuration")
+        st.subheader("📊 CloudWatch Configuration")
 
-            st.success("✅ **Using your actual CloudWatch log groups!**")
+        st.success("✅ **Using your actual CloudWatch log groups!**")
 
-            st.write("**📝 Your CloudWatch Log Groups:**")
+        st.write("**📝 Your CloudWatch Log Groups:**")
 
             # Use YOUR EXACT log group names
-            your_actual_log_groups = [
+        your_actual_log_groups = [
                 "SQLServer/ErrorLogs",
                 "Windows/Application", 
                 "Windows/Security",
@@ -1978,16 +1978,16 @@ AWS_DEFAULT_REGION=us-east-1
             ]
 
             # Let user select which ones to monitor
-            selected_log_groups = st.multiselect(
-                "Select Log Groups to Monitor",
-                your_actual_log_groups,
-                default=your_actual_log_groups,  # Select all by default
-                help="These are your actual log groups from CloudWatch"
+        selected_log_groups = st.multiselect(
+            "Select Log Groups to Monitor",
+        your_actual_log_groups,
+            default=your_actual_log_groups,  # Select all by default
+            help="These are your actual log groups from CloudWatch"
             )
 
             # Option to add custom log groups
-            st.write("**➕ Additional Log Groups (Optional):**")
-            custom_log_groups_text = st.text_area(
+        st.write("**➕ Additional Log Groups (Optional):**")
+        custom_log_groups_text = st.text_area(
                 "Additional log groups (one per line)",
                 value="",
                 height=80,
@@ -1995,10 +1995,10 @@ AWS_DEFAULT_REGION=us-east-1
             )
 
             # Combine selected and custom log groups
-            log_groups = selected_log_groups.copy()
+        log_groups = selected_log_groups.copy()
             if custom_log_groups_text.strip():
-                custom_groups = [lg.strip() for lg in custom_log_groups_text.split('\n') if lg.strip()]
-                log_groups.extend(custom_groups)
+        custom_groups = [lg.strip() for lg in custom_log_groups_text.split('\n') if lg.strip()]
+        log_groups.extend(custom_groups)
 
             # Show final configuration
             if log_groups:
