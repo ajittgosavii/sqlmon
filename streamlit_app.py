@@ -3278,6 +3278,9 @@ def collect_comprehensive_metrics():
     
     all_metrics = {}
     all_logs = {}
+    ec2_instances = []  # Initialize ec2_instances
+    
+    try:
     
     try:
         # Get AWS account information
