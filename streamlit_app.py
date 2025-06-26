@@ -1121,44 +1121,44 @@ class AWSCloudWatchConnector:
         return results
     
     def test_log_groups(log_groups):
-    """Test access to specified log groups"""
-    if not st.session_state.cloudwatch_connector or st.session_state.cloudwatch_connector.demo_mode:
-        st.warning("AWS connection required for testing")
-        return
-    
-    st.write("🧪 **Testing log group access...**")
-    
-    logs_client = st.session_state.cloudwatch_connector.aws_manager.get_client('logs')
-    if not logs_client:
-        st.error("❌ No CloudWatch Logs client available")
-        return
-    
-    results = []
-    
-    for log_group in log_groups:
-        try:
-            # Test by trying to describe the log group
-            response = logs_client.describe_log_groups(
-                logGroupNamePrefix=log_group,
-                limit=1
-            )
-            
-            found = any(lg['logGroupName'] == log_group for lg in response['logGroups'])
-            
-            if found:
-                try:
-                    logs_client.filter_log_events(
-                        logGroupName=log_group,
-                        limit=1
-                    )
-                    results.append({"log_group": log_group, "status": "✅ OK", "message": "Accessible"})
-                except Exception as read_error:
-                    results.append({"log_group": log_group, "status": "⚠️ Limited", "message": f"Read error: {str(read_error)}"})
-            else:
-                results.append({"log_group": log_group, "status": "❌ Not Found", "message": "Log group does not exist"})
+        """Test access to specified log groups"""
+        if not st.session_state.cloudwatch_connector or st.session_state.cloudwatch_connector.demo_mode:
+            st.warning("AWS connection required for testing")
+            return
+        
+        st.write("🧪 **Testing log group access...**")
+        
+        logs_client = st.session_state.cloudwatch_connector.aws_manager.get_client('logs')
+        if not logs_client:
+            st.error("❌ No CloudWatch Logs client available")
+            return
+        
+        results = []
+        
+        for log_group in log_groups:
+            try:
+                # Test by trying to describe the log group
+                response = logs_client.describe_log_groups(
+                    logGroupNamePrefix=log_group,
+                    limit=1
+                )
                 
-        except Exception as e:
-            results.append({"log_group": log_group, "status": "❌ Error", "message": str(e)})
+                found = any(lg['logGroupName'] == log_group for lg in response['logGroups'])
+                
+                if found:
+                    try:
+                        logs_client.filter_log_events(
+                            logGroupName=log_group,
+                            limit=1
+                        )
+                        results.append({"log_group": log_group, "status": "✅ OK", "message": "Accessible"})
+                    except Exception as read_error:
+                        results.append({"log_group": log_group, "status": "⚠️ Limited", "message": f"Read error: {str(read_error)}"})
+                else:
+                    results.append({"log_group": log_group, "status": "❌ Not Found", "message": "Log group does not exist"})
+                    
+            except Exception as e:
+                results.append({"log_group": log_group, "status": "❌ Error", "message": str(e)})
     
     # Display results
     for result in results:
