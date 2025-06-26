@@ -3068,7 +3068,9 @@ def initialize_session_state(aws_config):
         st.session_state.always_on_monitor = AlwaysOnMonitor(st.session_state.cloudwatch_connector)
         st.session_state.auto_remediation = EnhancedAutoRemediationEngine(st.session_state.cloudwatch_connector)  # ✅ Fixed
         st.session_state.predictive_analytics = EnhancedPredictiveAnalyticsEngine(st.session_state.cloudwatch_connector)
-    
+        
+except Exception as e:
+    st.error(f"Failed to initialize: {str(e)}")
     
     
     
