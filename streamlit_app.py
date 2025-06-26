@@ -269,7 +269,7 @@ EMBEDDED_CONFIG = {
         }
     }
 }
-    }
+    
 
             # =================== EMBEDDED CONFIGURATION MANAGER ===================
 class EmbeddedConfigurationManager:
