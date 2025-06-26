@@ -1210,7 +1210,7 @@ class AWSCloudWatchConnector:
             return []
 
     def get_available_log_groups(self):
-    """Get ALL available CloudWatch log groups"""
+        """Get ALL available CloudWatch log groups"""
     
     if self.demo_mode:
         return [
