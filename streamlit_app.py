@@ -22,6 +22,15 @@ import os
 import sys
 
 
+
+# Add this near the top of your existing file (after your imports)
+from enterprise_enhancements import (
+    load_enhanced_enterprise_css,
+    render_enhanced_executive_dashboard,
+    render_enhanced_auto_remediation_tab,
+    calculate_enhanced_health_score
+)
+
 # ================= ENHANCED SQL SERVER METRICS CONFIGURATION =================
 SQL_SERVER_METRICS_CONFIG = {
     'core_performance': {
@@ -5389,7 +5398,10 @@ def render_ai_recommendations(engine, all_metrics):
 # =================== Main Application ===================
 def main():
     # Load CSS styles
-    load_css_styles()
+    #load_css_styles()
+    from enterprise_enhancements import load_enhanced_enterprise_css
+    load_enhanced_enterprise_css()
+    
     
     # Display header
     st.markdown('<div class="aws-header"><h1>☁️ AWS CloudWatch SQL Server Monitor</h1><p>Enterprise-grade monitoring with AI-powered analytics and auto-remediation - Optimized for Streamlit Cloud</p></div>', unsafe_allow_html=True)
@@ -5445,6 +5457,11 @@ def main():
     # Render tabs
     with tab1:
         render_dashboard_tab(all_metrics, ec2_instances, rds_instances)
+        
+        if st.checkbox("🏢 Show Executive View", value=True):
+        st.markdown("---")
+        from enterprise_enhancements import render_enhanced_executive_dashboard
+        render_enhanced_executive_dashboard(all_metrics, ec2_instances, rds_instances)# New
     
     with tab2:        
         render_enhanced_sql_metrics_tab(all_metrics, ec2_instances)
