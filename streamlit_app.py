@@ -1150,7 +1150,7 @@ class AWSCloudWatchConnector:
             return []
     
     def get_ec2_sql_instances(self):
-    """Get ALL EC2 instances and let user choose SQL Servers"""
+        """Get ALL EC2 instances and let user choose SQL Servers"""
     
     if self.demo_mode:
         return [
