@@ -3281,8 +3281,6 @@ def collect_comprehensive_metrics():
     ec2_instances = []  # Initialize ec2_instances
     
     try:
-    
-    try:
         # Get AWS account information
         account_info = st.session_state.cloudwatch_connector.get_account_info()
         
@@ -3295,7 +3293,7 @@ def collect_comprehensive_metrics():
             st.sidebar.write(f"**Environment:** {account_info.get('environment', 'Unknown')}")
         
         # Get EC2 instances for comprehensive monitoring
-        ec2_instances = st.session_state.cloudwatch_connector.get_ec2_sql_instances()
+        ec2_instances = st.session_state.cloudwatch_connector.get_ec2_instances()
         
         for ec2 in ec2_instances:
             instance_id = ec2['InstanceId']
