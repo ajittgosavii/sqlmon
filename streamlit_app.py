@@ -5459,9 +5459,9 @@ def main():
         render_dashboard_tab(all_metrics, ec2_instances, rds_instances)
         
         if st.checkbox("🏢 Show Executive View", value=True):
-        st.markdown("---")
+            st.markdown("---")
         from enterprise_enhancements import render_enhanced_executive_dashboard
-        render_enhanced_executive_dashboard(all_metrics, ec2_instances, rds_instances)# New
+            render_enhanced_executive_dashboard(all_metrics, ec2_instances, rds_instances)# New
     
     with tab2:        
         render_enhanced_sql_metrics_tab(all_metrics, ec2_instances)
