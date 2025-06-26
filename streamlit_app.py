@@ -2301,9 +2301,7 @@ def main():
             # Clear cache for fresh data
             collect_comprehensive_metrics.clear()
             st.rerun()
-
-
-      **Unknown AWS Error:** {error_code}")
+           
                 
                 # Show the full error details
                 with st.expander("🔍 Full Error Details"):
