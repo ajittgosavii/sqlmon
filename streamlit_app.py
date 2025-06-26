@@ -5446,8 +5446,7 @@ def main():
     with tab1:
         render_dashboard_tab(all_metrics, ec2_instances, rds_instances)
     
-    with tab2:
-        with tab2:
+    with tab2:        
         render_enhanced_sql_metrics_tab(all_metrics, ec2_instances)
     
     with tab3:
