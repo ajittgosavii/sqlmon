@@ -1849,7 +1849,7 @@ class ClaudeAIAnalyzer:
             self.enabled = False
 
 # =================== Configuration Functions ===================
-    def setup_sidebar_configuration():
+def setup_sidebar_configuration():
         """Setup sidebar configuration and return AWS config"""
         with st.sidebar:
             st.header("🔧 AWS Configuration")
