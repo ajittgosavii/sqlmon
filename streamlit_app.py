@@ -292,37 +292,137 @@ class StreamlitAWSManager:
         return True
     
     def _test_session(self, session, method_name: str) -> bool:
-        """Test AWS session with comprehensive checks"""
+        """Test AWS session with detailed error reporting and debugging"""
         try:
-            config = Config(
-                region_name=session.region_name or 'us-east-1',
-                retries={'max_attempts': 2, 'mode': 'standard'},
-                max_pool_connections=10,
-                read_timeout=30,
-                connect_timeout=30
-            )
-            
-            sts_client = session.client('sts', config=config)
-            identity = sts_client.get_caller_identity()
-            
-            self.connection_status.update({
-                'account_id': identity.get('Account'),
-                'user_arn': identity.get('Arn'),
-                'region': session.region_name,
-                'last_test': datetime.now()
-            })
-            
-            cloudwatch_client = session.client('cloudwatch', config=config)
-            cloudwatch_client.list_metrics(MaxRecords=1)
-            
-            return True
-            
+            # Show debug info in the UI
+            with st.container():
+                st.write(f"🧪 **Testing {method_name} session...**")
+                
+                config = Config(
+                    region_name=session.region_name or 'us-east-1',
+                    retries={'max_attempts': 2, 'mode': 'standard'},
+                    max_pool_connections=10,
+                    read_timeout=30,
+                    connect_timeout=30
+                )
+                
+                # Test STS first (most basic AWS service)
+                st.write("🔄 Creating STS client...")
+                sts_client = session.client('sts', config=config)
+                
+                st.write("🔄 Calling sts.get_caller_identity()...")
+                identity = sts_client.get_caller_identity()
+                
+                st.success(f"✅ **STS Success!**")
+                st.write(f"📋 **Account ID:** {identity.get('Account')}")
+                st.write(f"👤 **User ARN:** {identity.get('Arn')}")
+                st.write(f"🌍 **Region:** {session.region_name}")
+                
+                # Store account information
+                self.connection_status.update({
+                    'account_id': identity.get('Account'),
+                    'user_arn': identity.get('Arn'),
+                    'region': session.region_name,
+                    'last_test': datetime.now()
+                })
+                
+                # Test CloudWatch access
+                st.write("🔄 Testing CloudWatch access...")
+                try:
+                    cloudwatch_client = session.client('cloudwatch', config=config)
+                    response = cloudwatch_client.list_metrics()
+                    metrics_count = len(response.get('Metrics', []))
+                    st.success(f"✅ CloudWatch access confirmed - found {metrics_count} metrics")
+                except ClientError as cw_e:
+                    error_code = cw_e.response['Error']['Code']
+                    st.warning(f"⚠️ CloudWatch access limited: {error_code}")
+                    if error_code == "AccessDenied":
+                        st.info("💡 Need cloudwatch:ListMetrics permission - but basic functionality will still work")
+                    else:
+                        st.info("💡 CloudWatch permissions limited - but basic functionality will still work")
+                except Exception as cw_e:
+                    st.warning(f"⚠️ CloudWatch test failed: {str(cw_e)}")
+                
+                # Test EC2 access
+                st.write("🔄 Testing EC2 access...")
+                try:
+                    ec2_client = session.client('ec2', config=config)
+                    response = ec2_client.describe_instances(MaxResults=5)
+                    total_instances = sum(len(r['Instances']) for r in response['Reservations'])
+                    st.success(f"✅ EC2 access confirmed - found {total_instances} instances")
+                except ClientError as ec2_e:
+                    error_code = ec2_e.response['Error']['Code']
+                    st.warning(f"⚠️ EC2 access limited: {error_code}")
+                    if error_code == "UnauthorizedOperation":
+                        st.info("💡 Need ec2:DescribeInstances permission")
+                except Exception as ec2_e:
+                    st.info(f"ℹ️ EC2 test skipped: {str(ec2_e)}")
+                
+                # Test RDS access
+                st.write("🔄 Testing RDS access...")
+                try:
+                    rds_client = session.client('rds', config=config)
+                    response = rds_client.describe_db_instances(MaxRecords=5)
+                    db_count = len(response.get('DBInstances', []))
+                    st.success(f"✅ RDS access confirmed - found {db_count} DB instances")
+                except ClientError as rds_e:
+                    error_code = rds_e.response['Error']['Code']
+                    st.warning(f"⚠️ RDS access limited: {error_code}")
+                    if error_code == "AccessDenied":
+                        st.info("💡 Need rds:DescribeDBInstances permission")
+                except Exception as rds_e:
+                    st.info(f"ℹ️ RDS test skipped: {str(rds_e)}")
+                
+                return True
+                
         except ClientError as e:
             error_code = e.response['Error']['Code']
-            self.connection_status['error'] = f"AWS Error ({error_code}): {e.response['Error']['Message']}"
+            error_message = e.response['Error']['Message']
+            
+            # Show detailed error in the UI
+            with st.container():
+                st.error(f"❌ **AWS ClientError: {error_code}**")
+                st.error(f"📝 **Message:** {error_message}")
+                
+                # Show specific error help
+                if error_code == "InvalidUserID.NotFound":
+                    st.error("🔑 **Issue:** Your AWS Access Key ID is invalid or the user was deleted")
+                    st.info("💡 **Fix:** Check your AWS Access Key ID in the AWS Console")
+                elif error_code == "SignatureDoesNotMatch":
+                    st.error("🔑 **Issue:** Your AWS Secret Access Key is incorrect")
+                    st.info("💡 **Fix:** Check your AWS Secret Access Key in the AWS Console")
+                elif error_code == "AccessDenied":
+                    st.error("🔒 **Issue:** Your user doesn't have sts:GetCallerIdentity permission")
+                    st.info("💡 **Fix:** Ask your AWS admin to add IAM permissions")
+                elif error_code == "TokenRefreshRequired":
+                    st.error("⏰ **Issue:** Your AWS credentials have expired")
+                    st.info("💡 **Fix:** Generate new AWS credentials")
+                else:
+                    st.error(f"❓ **Unknown AWS Error:** {error_code}")
+                
+                # Show the full error details
+                with st.expander("🔍 Full Error Details"):
+                    st.json(e.response)
+            
+            self.connection_status['error'] = f"{error_code}: {error_message}"
             return False
+            
         except Exception as e:
-            self.connection_status['error'] = f"Connection test failed ({method_name}): {str(e)}"
+            # Show unexpected errors
+            with st.container():
+                st.error(f"❌ **Unexpected Error:** {str(e)}")
+                st.error(f"📝 **Error Type:** {type(e).__name__}")
+                
+                # Show more details for debugging
+                with st.expander("🔍 Technical Details"):
+                    st.code(f"""
+Error Type: {type(e).__name__}
+Error Message: {str(e)}
+Method: {method_name}
+Region: {session.region_name if session else 'Unknown'}
+                    """)
+            
+            self.connection_status['error'] = f"Unexpected error: {str(e)}"
             return False
     
     def _initialize_clients(self):
@@ -2048,6 +2148,37 @@ def display_connection_status():
                 with st.expander("🔍 View Error Details"):
                     st.error(conn_status['error'])
 
+def show_tagging_instructions():
+    """Show instructions for manually tagging instances"""
+    st.subheader("🏷️ How to Tag EC2 Instances for SQL Server")
+    
+    st.info("**The app looks for instances with this tag:**")
+    st.code("Key: Application\nValue: SQLServer")
+    
+    st.write("**Alternative accepted values:**")
+    st.write("• `SQL Server`")
+    st.write("• `Database`")
+    st.write("• `MSSQL`")
+    
+    st.subheader("📝 Manual Tagging Steps")
+    
+    with st.expander("🖱️ Tag via AWS Console"):
+        st.write("1. Go to **EC2 Console** → **Instances**")
+        st.write("2. **Select your SQL Server instance**")
+        st.write("3. Click **Actions** → **Instance Settings** → **Manage Tags**")
+        st.write("4. Click **Add Tag**")
+        st.write("5. Enter:")
+        st.code("Key: Application\nValue: SQLServer")
+        st.write("6. Click **Save**")
+    
+    with st.expander("💻 Tag via AWS CLI"):
+        st.code("""
+# Replace i-1234567890abcdef0 with your instance ID
+aws ec2 create-tags \\
+    --resources i-1234567890abcdef0 \\
+    --tags Key=Application,Value=SQLServer
+        """)
+
 # =================== Data Collection Functions ===================
 @st.cache_data(ttl=300)
 def collect_comprehensive_metrics():
@@ -2112,6 +2243,161 @@ def collect_comprehensive_metrics():
         st.error(f"Error collecting metrics: {str(e)}")
     
     return all_metrics, all_logs, ec2_instances
+
+def debug_ec2_instances():
+    """Debug function to find all EC2 instances and their tags"""
+    
+    if not st.session_state.cloudwatch_connector or st.session_state.cloudwatch_connector.demo_mode:
+        st.info("Connect to AWS first to see your EC2 instances")
+        return
+    
+    st.header("🔍 EC2 Instance Detective")
+    st.info("Let's find all your EC2 instances and see how they're tagged")
+    
+    if st.button("🕵️ Find All My EC2 Instances", type="primary"):
+        try:
+            ec2_client = st.session_state.cloudwatch_connector.aws_manager.get_client('ec2')
+            if not ec2_client:
+                st.error("No EC2 client available")
+                return
+            
+            with st.spinner("Searching for EC2 instances..."):
+                # Get ALL instances (no filters)
+                response = ec2_client.describe_instances()
+                
+                all_instances = []
+                for reservation in response['Reservations']:
+                    for instance in reservation['Instances']:
+                        all_instances.append(instance)
+                
+                if not all_instances:
+                    st.warning("🤷‍♂️ No EC2 instances found in your account")
+                    st.info("**Possible reasons:**")
+                    st.write("• You don't have any EC2 instances")
+                    st.write("• Your instances are in a different region")
+                    st.write("• You don't have ec2:DescribeInstances permission")
+                    return
+                
+                st.success(f"🎉 Found {len(all_instances)} EC2 instances!")
+                
+                # Show all instances with their tags
+                for i, instance in enumerate(all_instances):
+                    instance_id = instance['InstanceId']
+                    instance_type = instance['InstanceType']
+                    state = instance['State']['Name']
+                    
+                    # Get instance name from tags
+                    instance_name = "Unnamed"
+                    for tag in instance.get('Tags', []):
+                        if tag['Key'] == 'Name':
+                            instance_name = tag['Value']
+                            break
+                    
+                    # Color code by state
+                    if state == 'running':
+                        state_color = "🟢"
+                    elif state == 'stopped':
+                        state_color = "🟡"
+                    else:
+                        state_color = "🔴"
+                    
+                    st.markdown(f"### {state_color} Instance {i+1}: **{instance_name}**")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write(f"**Instance ID:** {instance_id}")
+                        st.write(f"**Type:** {instance_type}")
+                        st.write(f"**State:** {state}")
+                        st.write(f"**Private IP:** {instance.get('PrivateIpAddress', 'N/A')}")
+                    
+                    with col2:
+                        # Show all tags
+                        tags = instance.get('Tags', [])
+                        if tags:
+                            st.write("**Tags:**")
+                            for tag in tags:
+                                st.write(f"  • **{tag['Key']}:** {tag['Value']}")
+                        else:
+                            st.write("**Tags:** None")
+                    
+                    # Check if this instance would be detected as SQL Server
+                    sql_server_tags = ['SQLServer', 'SQL Server', 'Database', 'MSSQL', 'SqlServer']
+                    is_sql_server = False
+                    
+                    for tag in tags:
+                        if tag['Key'] == 'Application' and tag['Value'] in sql_server_tags:
+                            is_sql_server = True
+                            break
+                    
+                    if is_sql_server:
+                        st.success("✅ This instance WOULD be detected as SQL Server")
+                    else:
+                        st.error("❌ This instance would NOT be detected as SQL Server")
+                        st.info("💡 To make this a SQL Server instance, add tag: **Application = SQLServer**")
+                    
+                    # Option to tag this instance
+                    if not is_sql_server and state == 'running':
+                        with st.expander(f"🏷️ Tag {instance_name} as SQL Server"):
+                            st.write("Click the button below to add the SQL Server tag to this instance:")
+                            
+                            if st.button(f"🏷️ Tag as SQL Server", key=f"tag_{instance_id}"):
+                                try:
+                                    ec2_client.create_tags(
+                                        Resources=[instance_id],
+                                        Tags=[
+                                            {
+                                                'Key': 'Application',
+                                                'Value': 'SQLServer'
+                                            }
+                                        ]
+                                    )
+                                    st.success(f"✅ Successfully tagged {instance_name} as SQLServer!")
+                                    st.info("🔄 Refresh the page to see the updated tags")
+                                    
+                                except Exception as tag_error:
+                                    st.error(f"❌ Failed to tag instance: {tag_error}")
+                    
+                    st.markdown("---")
+                
+                # Summary
+                sql_instances = 0
+                for instance in all_instances:
+                    tags = instance.get('Tags', [])
+                    for tag in tags:
+                        if tag['Key'] == 'Application' and tag['Value'] in ['SQLServer', 'SQL Server', 'Database']:
+                            sql_instances += 1
+                            break
+                
+                st.subheader("📊 Summary")
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric("Total Instances", len(all_instances))
+                
+                with col2:
+                    running_instances = len([i for i in all_instances if i['State']['Name'] == 'running'])
+                    st.metric("Running Instances", running_instances)
+                
+                with col3:
+                    st.metric("SQL Server Tagged", sql_instances)
+                
+                if sql_instances == 0:
+                    st.warning("⚠️ **No instances are tagged for SQL Server detection**")
+                    st.info("**To fix this:** Add the tag `Application = SQLServer` to your SQL Server instances")
+                else:
+                    st.success(f"🎉 **{sql_instances} instances are properly tagged for SQL Server!**")
+        
+        except Exception as e:
+            st.error(f"❌ Failed to get EC2 instances: {e}")
+            
+            # Show helpful error messages
+            if "UnauthorizedOperation" in str(e):
+                st.error("🔒 **Permission Issue:** You don't have ec2:DescribeInstances permission")
+                st.info("**Ask your AWS admin to add this IAM permission:**")
+                st.code('"ec2:DescribeInstances"')
+            elif "AccessDenied" in str(e):
+                st.error("🔒 **Access Denied:** Check your IAM permissions")
 
 # =================== Tab Rendering Functions ===================
 def render_dashboard_tab(all_metrics, ec2_instances, rds_instances):
@@ -3041,10 +3327,17 @@ def render_reports_tab():
         
         # Calculate metrics for summary
         system_health = 87
-        if 'all_metrics' in globals() and all_metrics.get('cpu_usage') and all_metrics.get('memory_usage'):
-            avg_cpu = np.mean([dp['Average'] for dp in all_metrics['cpu_usage'][-10:]])
-            avg_mem = np.mean([dp['Average'] for dp in all_metrics['memory_usage'][-10:]])
-            system_health = max(0, 100 - ((avg_cpu + avg_mem) / 2))
+        all_metrics = {}  # Initialize as empty dict
+        if hasattr(st.session_state, 'cloudwatch_connector') and st.session_state.cloudwatch_connector:
+            try:
+                # Try to get metrics if available
+                all_metrics, _, _ = collect_comprehensive_metrics()
+                if all_metrics.get('cpu_usage') and all_metrics.get('memory_usage'):
+                    avg_cpu = np.mean([dp['Average'] for dp in all_metrics['cpu_usage'][-10:]])
+                    avg_mem = np.mean([dp['Average'] for dp in all_metrics['memory_usage'][-10:]])
+                    system_health = max(0, 100 - ((avg_cpu + avg_mem) / 2))
+            except:
+                pass  # Use default value if metrics unavailable
         
         # Key metrics summary
         col1, col2, col3 = st.columns(3)
@@ -3097,8 +3390,14 @@ def render_reports_tab():
         
         # Performance summary table
         performance_data = []
+        all_metrics = {}  # Initialize as empty dict
         
-        if 'all_metrics' in globals() and all_metrics.get('cpu_usage'):
+        try:
+            all_metrics, _, _ = collect_comprehensive_metrics()
+        except:
+            pass  # Use defaults if metrics unavailable
+        
+        if all_metrics.get('cpu_usage'):
             avg_cpu = np.mean([dp['Average'] for dp in all_metrics['cpu_usage'][-10:]])
             performance_data.append({
                 'Metric': 'Average CPU Usage',
@@ -3107,7 +3406,7 @@ def render_reports_tab():
                 'Status': '🟢 Good' if avg_cpu < 70 else '🟡 Monitor' if avg_cpu < 85 else '🔴 Critical'
             })
         
-        if 'all_metrics' in globals() and all_metrics.get('memory_usage'):
+        if all_metrics.get('memory_usage'):
             avg_memory = np.mean([dp['Average'] for dp in all_metrics['memory_usage'][-10:]])
             performance_data.append({
                 'Metric': 'Average Memory Usage',
@@ -3236,7 +3535,7 @@ def main():
         all_metrics.update(basic_metrics)
     
     # Main tabs
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
         "🏠 Dashboard", 
         "🗄️ SQL Metrics",
         "🖥️ OS Metrics",
@@ -3245,7 +3544,8 @@ def main():
         "🔮 Predictive Analytics", 
         "🚨 Alerts", 
         "📊 Performance",
-        "📈 Reports"
+        "📈 Reports",
+        "🔍 EC2 Debug"
     ])
     
     # Render tabs
@@ -3275,6 +3575,9 @@ def main():
     
     with tab9:
         render_reports_tab()
+    
+    with tab10:
+        debug_ec2_instances()
     
     # Auto-refresh functionality with Streamlit Cloud optimization
     if 'last_refresh' not in st.session_state:
