@@ -2302,8 +2302,8 @@ def main():
             collect_comprehensive_metrics.clear()
             st.rerun()
 
-if __name__ == "__main__":
-    main()f"❓ **Unknown AWS Error:** {error_code}")
+
+      **Unknown AWS Error:** {error_code}")
                 
                 # Show the full error details
                 with st.expander("🔍 Full Error Details"):
