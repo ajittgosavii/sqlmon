@@ -210,7 +210,7 @@ class StreamlitAWSManager:
         
         access_key = str(aws_config.get('access_key', '')).strip()
         secret_key = str(aws_config.get('secret_key', '')).strip()
-        region = str(aws_config.get('region', 'us-east-1')).strip()
+        region = str(aws_config.get('region', 'us-east-2')).strip()
         
         os.environ['AWS_DEFAULT_REGION'] = region
         
@@ -299,7 +299,7 @@ class StreamlitAWSManager:
                 st.write(f"🧪 **Testing {method_name} session...**")
                 
                 config = Config(
-                    region_name=session.region_name or 'us-east-1',
+                    region_name=session.region_name or 'us-east-2',
                     retries={'max_attempts': 2, 'mode': 'standard'},
                     max_pool_connections=10,
                     read_timeout=30,
@@ -719,7 +719,7 @@ class AWSCloudWatchConnector:
                     'DBInstanceIdentifier': 'sql-server-prod-1',
                     'Engine': 'sqlserver-ex',
                     'DBInstanceStatus': 'available',
-                    'AvailabilityZone': 'us-east-1a',
+                    'AvailabilityZone': 'us-east-2a',
                     'MultiAZ': False,
                     'AllocatedStorage': 100
                 },
@@ -727,7 +727,7 @@ class AWSCloudWatchConnector:
                     'DBInstanceIdentifier': 'sql-server-prod-2',
                     'Engine': 'sqlserver-se',
                     'DBInstanceStatus': 'available',
-                    'AvailabilityZone': 'us-east-1b',
+                    'AvailabilityZone': 'us-east-2b',
                     'MultiAZ': True,
                     'AllocatedStorage': 500
                 }
@@ -1027,7 +1027,7 @@ class AWSCloudWatchConnector:
             return {
                 'account_id': '123456789012',
                 'account_alias': 'demo-sql-environment',
-                'region': self.aws_config.get('region', 'us-east-1'),
+                'region': self.aws_config.get('region', 'us-east-2'),
                 'vpc_id': 'vpc-1234567890abcdef0',
                 'environment': 'demo'
             }
@@ -1907,7 +1907,7 @@ def setup_sidebar_configuration():
     Environment Variables:
     AWS_ACCESS_KEY_ID=your_access_key_here
     AWS_SECRET_ACCESS_KEY=your_secret_key_here
-    AWS_DEFAULT_REGION=us-east-1
+    AWS_DEFAULT_REGION=us-east-2
                 """)
                 
                 env_access_key = os.getenv('AWS_ACCESS_KEY_ID')
@@ -2035,7 +2035,7 @@ def setup_sidebar_configuration():
                 ```bash
                 AWS_ACCESS_KEY_ID=your_access_key
                 AWS_SECRET_ACCESS_KEY=your_secret_key
-                AWS_DEFAULT_REGION=us-east-1
+                AWS_DEFAULT_REGION=us-east-2
                 ```
                 
                 **Required IAM Permissions:**
