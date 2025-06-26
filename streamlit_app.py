@@ -3062,156 +3062,114 @@ def render_predictive_analytics_tab(all_metrics, enable_predictive_alerts):
         st.warning("🔒 Predictive analytics is currently disabled")
         st.info("Enable predictive alerts in the sidebar to see trend analysis and capacity planning insights.")
 
+# Fix for streamlit_app.py
+# Find the render_alerts_tab function around line 2000 and modify it:
+
 def render_alerts_tab(all_metrics, all_logs):
     """Render alerts tab"""
     st.header("🚨 Intelligent Alert Management")
     
-    # Generate current alerts based on metrics
-    current_alerts = []
+    # ... existing code ...
     
-    # Check for critical conditions
-    if all_metrics.get('cpu_usage'):
-        latest_cpu = all_metrics['cpu_usage'][-1]['Average']
-        if latest_cpu > 90:
-            current_alerts.append({
-                'timestamp': datetime.now(),
-                'severity': 'critical',
-                'source': 'CloudWatch',
-                'instance': 'System Average',
-                'message': f'Critical CPU utilization detected ({latest_cpu:.1f}%)',
-                'auto_remediation': 'Available'
-            })
-        elif latest_cpu > 80:
-            current_alerts.append({
-                'timestamp': datetime.now(),
-                'severity': 'warning',
-                'source': 'CloudWatch',
-                'instance': 'System Average',
-                'message': f'High CPU utilization detected ({latest_cpu:.1f}%)',
-                'auto_remediation': 'Available'
-            })
-    
-    # Add demo alerts for demonstration
-    if st.session_state.cloudwatch_connector.demo_mode:
-        demo_alerts = [
-            {
-                'timestamp': datetime.now() - timedelta(minutes=5),
-                'severity': 'warning',
-                'source': 'Always On Monitor',
-                'instance': 'AG-Production',
-                'message': 'Synchronization lag detected (3.2 seconds)',
-                'auto_remediation': 'Manual'
-            },
-            {
-                'timestamp': datetime.now() - timedelta(hours=1),
-                'severity': 'info',
-                'source': 'Predictive Analytics',
-                'instance': 'sql-server-prod-2',
-                'message': 'Memory usage trend increasing - action recommended within 24h',
-                'auto_remediation': 'Scheduled'
-            }
-        ]
-        current_alerts.extend(demo_alerts)
-    
-    # Alert summary
-    col1, col2, col3, col4 = st.columns(4)
-    
-    critical_alerts = [a for a in current_alerts if a['severity'] == 'critical']
-    warning_alerts = [a for a in current_alerts if a['severity'] == 'warning']
-    info_alerts = [a for a in current_alerts if a['severity'] == 'info']
-    
-    with col1:
-        st.metric("🔴 Critical", len(critical_alerts))
-    
-    with col2:
-        st.metric("🟡 Warning", len(warning_alerts))
-    
-    with col3:
-        st.metric("🔵 Info", len(info_alerts))
-    
-    with col4:
-        auto_remediated = [a for a in current_alerts if a['auto_remediation'] == 'Available']
-        st.metric("🤖 Auto-Remediation", len(auto_remediated))
-    
-    st.markdown("---")
-    
-    # Alert list
-    if current_alerts:
-        st.subheader("📋 Active Alerts")
-        
-        for alert in current_alerts:
-            severity_styles = {
-                'critical': 'alert-critical',
-                'warning': 'alert-warning',
-                'info': 'claude-insight'
-            }
-            
-            style_class = severity_styles.get(alert['severity'], 'metric-card')
-            timestamp_str = alert['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
-            
-            st.markdown(f"""
-            <div class="{style_class}">
-                <strong>{alert['severity'].upper()}</strong> - {alert['instance']}<br>
-                <strong>Source:</strong> {alert['source']}<br>
-                <strong>Message:</strong> {alert['message']}<br>
-                <strong>Time:</strong> {timestamp_str}<br>
-                <strong>Auto-Remediation:</strong> {alert['auto_remediation']}
-            </div>
-            """, unsafe_allow_html=True)
-            
-            if alert['severity'] == 'critical':
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    if st.button(f"🔧 Remediate", key=f"remediate_{alert['instance']}_{alert['timestamp']}"):
-                        st.success("Remediation action initiated")
-                with col2:
-                    if st.button(f"📞 Escalate", key=f"escalate_{alert['instance']}_{alert['timestamp']}"):
-                        st.info("Alert escalated to on-call engineer")
-                with col3:
-                    if st.button(f"✅ Acknowledge", key=f"ack_{alert['instance']}_{alert['timestamp']}"):
-                        st.info("Alert acknowledged")
-    
-    else:
-        st.success("🎉 No active alerts!")
-        st.info("All monitored systems are operating normally.")
-    
-    # Enhanced logs display
+    # Enhanced logs display - REPLACE THE EXISTING LOG SECTION
     st.markdown("---")
     st.subheader("📝 CloudWatch Logs Analysis")
     
-    if all_logs:
-        # Log group selector
-        selected_log_group = st.selectbox(
-            "Select Log Group", 
-            list(all_logs.keys())
-        )
-        
-        if selected_log_group and all_logs[selected_log_group]:
-            logs = all_logs[selected_log_group]
-            
-            # Log filters
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                log_level = st.selectbox("Filter by Level", 
-                                       ["All", "Error", "Warning", "Info"])
-            with col2:
-                search_term = st.text_input("Search in logs")
-            with col3:
-                max_logs = st.slider("Max logs to display", 10, 100, 20)
-            
-            # Filter logs
-            filtered_logs = logs[:max_logs]
-            if search_term:
-                filtered_logs = [log for log in filtered_logs 
-                               if search_term.lower() in log['message'].lower()]
-            
-            # Display logs
-            for log in filtered_logs:
-                timestamp = datetime.fromtimestamp(log['timestamp'] / 1000)
-                st.text(f"[{timestamp}] {log['message']}")
+    # Add time range selector
+    col1, col2 = st.columns(2)
+    with col1:
+        hours_back = st.selectbox("Time Range", [24, 48, 168, 720, 8760], 
+                                 format_func=lambda x: f"Last {x} hours" if x < 168 else f"Last {x//24} days",
+                                 index=2)  # Default to 7 days
+    
+    with col2:
+        if st.button("🔄 Refresh Logs"):
+            st.cache_data.clear()
+    
+    # Get logs with selected time range
+    if st.session_state.cloudwatch_connector:
+        aws_config = st.session_state.cloudwatch_connector.aws_config
+        if aws_config.get('log_groups'):
+            try:
+                # Get logs with custom time range
+                fresh_logs = st.session_state.cloudwatch_connector.get_sql_server_logs(
+                    aws_config['log_groups'], 
+                    hours=hours_back
+                )
+                
+                if fresh_logs:
+                    # Log group selector
+                    selected_log_group = st.selectbox(
+                        "Select Log Group", 
+                        list(fresh_logs.keys())
+                    )
+                    
+                    if selected_log_group and fresh_logs[selected_log_group]:
+                        logs = fresh_logs[selected_log_group]
+                        
+                        st.success(f"✅ Found {len(logs)} log events in {selected_log_group}")
+                        
+                        # Log filters
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            log_level = st.selectbox("Filter by Level", 
+                                                   ["All", "Error", "Warning", "Info"])
+                        with col2:
+                            search_term = st.text_input("Search in logs")
+                        with col3:
+                            max_logs = st.slider("Max logs to display", 10, 100, 20)
+                        
+                        # Filter logs
+                        filtered_logs = logs[:max_logs]
+                        if search_term:
+                            filtered_logs = [log for log in filtered_logs 
+                                           if search_term.lower() in log.get('message', '').lower()]
+                        
+                        # Display logs with better encoding handling
+                        st.subheader(f"📋 Recent Events from {selected_log_group}")
+                        
+                        for i, log in enumerate(filtered_logs):
+                            try:
+                                timestamp = datetime.fromtimestamp(log['timestamp'] / 1000)
+                                message = log.get('message', 'No message')
+                                
+                                # Handle encoding issues
+                                try:
+                                    # Try to decode if it's bytes
+                                    if isinstance(message, bytes):
+                                        message = message.decode('utf-8', errors='replace')
+                                    
+                                    # Clean up message for display
+                                    message = str(message).encode('utf-8', errors='replace').decode('utf-8')
+                                    
+                                except:
+                                    message = "Message contains special characters that cannot be displayed"
+                                
+                                # Display with timestamp
+                                with st.expander(f"🕐 {timestamp.strftime('%Y-%m-%d %H:%M:%S')} - Event {i+1}"):
+                                    st.text(message[:1000])  # Limit message length
+                                    if len(message) > 1000:
+                                        st.info("Message truncated - full message too long")
+                                    
+                                    st.caption(f"Log Stream: {log.get('logStreamName', 'Unknown')}")
+                                
+                            except Exception as e:
+                                st.error(f"Error displaying log event: {str(e)}")
+                    
+                    else:
+                        st.warning(f"No events found in {selected_log_group} for the selected time range")
+                        st.info("Try extending the time range or check if CloudWatch agent is sending logs")
+                
+                else:
+                    st.warning("No log groups returned data")
+                    st.info("Check log group names and IAM permissions")
+                    
+            except Exception as e:
+                st.error(f"Error retrieving logs: {str(e)}")
+                st.info("Check your CloudWatch Logs permissions and log group names")
     
     else:
-        st.info("No log data available. Configure log groups in the sidebar.")
+        st.info("Connect to AWS first to see logs")
 
 def render_performance_tab(all_metrics):
     """Render performance analytics tab"""
