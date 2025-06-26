@@ -21,7 +21,7 @@ import re
 import os
 import sys
 
-# =================== EMBEDDED CONFIGURATION ===================
+    # =================== EMBEDDED CONFIGURATION ===================
 EMBEDDED_CONFIG = {
     "metadata": {
         "version": "1.0",
@@ -269,8 +269,9 @@ EMBEDDED_CONFIG = {
         }
     }
 }
+    
 
-# =================== EMBEDDED CONFIGURATION MANAGER ===================
+            # =================== EMBEDDED CONFIGURATION MANAGER ===================
 class EmbeddedConfigurationManager:
     """Manages embedded configuration for Streamlit Cloud compatibility"""
     
@@ -401,6 +402,15 @@ def generate_alerts_from_config(all_logs: Dict, config_manager: EmbeddedConfigur
     # Sort alerts by timestamp (newest first)
     alerts.sort(key=lambda x: x['timestamp'], reverse=True)
     return alerts[:20]  # Return only latest 20 alerts
+
+    @st.cache_resource
+    def get_embedded_config_manager():
+        """Get cached embedded configuration manager instance"""
+        return EmbeddedConfigurationManager()
+
+
+
+
 
 # Utility Functions
 def safe_format_method(method_value):
@@ -779,1556 +789,7 @@ class StreamlitAWSManager:
                     st.error("⏰ **Issue:** Your AWS credentials have expired")
                     st.info("💡 **Fix:** Generate new AWS credentials")
                 else:
-                    st.error("❌ CloudWatch connector not initialized")
-
-        # Enhanced Connection Status Display
-        if st.session_state.cloudwatch_connector:
-            st.markdown("---")
-            st.subheader("🔗 Connection Status")
-            
-            conn_status = st.session_state.cloudwatch_connector.get_connection_status()
-            
-            if conn_status.get('connected'):
-                if conn_status.get('demo_mode'):
-                    status_class = "cred-warning"
-                    status_icon = "🎭"
-                    status_text = "Demo Mode"
-                else:
-                    status_class = "cred-success"
-                    status_icon = "✅"
-                    status_text = "Connected"
-            else:
-                status_class = "cred-error"
-                status_icon = "❌"
-                status_text = "Disconnected"
-            
-            st.markdown(f"""
-            <div class="credential-status {status_class}">
-                <strong>{status_icon} Status:</strong> {status_text}<br>
-                <strong>Environment:</strong> {'Streamlit Cloud' if conn_status.get('streamlit_cloud') else 'Local'}<br>
-                <strong>Method:</strong> {safe_format_method(conn_status.get('method'))}<br>
-                <strong>Last Test:</strong> {conn_status.get('last_test').strftime('%H:%M:%S') if conn_status.get('last_test') else 'Never'}
-            </div>
-            """, unsafe_allow_html=True)
-            
-            if conn_status.get('account_id'):
-                st.write(f"**Account ID:** {conn_status['account_id']}")
-            
-            if conn_status.get('region'):
-                st.write(f"**Region:** {conn_status['region']}")
-            
-            if conn_status.get('error'):
-                with st.expander("🔍 View Error Details"):
-                    st.error(conn_status['error'])
-
-def show_tagging_instructions():
-    """Show instructions for manually tagging instances"""
-    st.subheader("🏷️ How to Tag EC2 Instances for SQL Server")
-    
-    st.info("**The app looks for instances with this tag:**")
-    st.code("Key: Application\nValue: SQLServer")
-    
-    st.write("**Alternative accepted values:**")
-    st.write("• `SQL Server`")
-    st.write("• `Database`")
-    st.write("• `MSSQL`")
-    
-    st.subheader("📝 Manual Tagging Steps")
-    
-    with st.expander("🖱️ Tag via AWS Console"):
-        st.write("1. Go to **EC2 Console** → **Instances**")
-        st.write("2. **Select your SQL Server instance**")
-        st.write("3. Click **Actions** → **Instance Settings** → **Manage Tags**")
-        st.write("4. Click **Add Tag**")
-        st.write("5. Enter:")
-        st.code("Key: Application\nValue: SQLServer")
-        st.write("6. Click **Save**")
-    
-    with st.expander("💻 Tag via AWS CLI"):
-        st.code("""
-# Replace i-1234567890abcdef0 with your instance ID
-aws ec2 create-tags \\
-    --resources i-1234567890abcdef0 \\
-    --tags Key=Application,Value=SQLServer
-        """)
-
-# =================== Data Collection Functions ===================
-@st.cache_data(ttl=300)
-def collect_comprehensive_metrics():
-    """Collect all metrics including OS, SQL Server, and logs with caching"""
-    if not st.session_state.cloudwatch_connector:
-        return {}, {}, []
-        
-    current_time = datetime.now()
-    start_time = current_time - timedelta(hours=24)
-    
-    all_metrics = {}
-    all_logs = {}
-    
-    try:
-        # Get AWS account information
-        account_info = st.session_state.cloudwatch_connector.get_account_info()
-        
-        # Display account info in sidebar
-        if account_info and not st.session_state.cloudwatch_connector.demo_mode:
-            st.sidebar.markdown("---")
-            st.sidebar.subheader("🏢 Account Information")
-            st.sidebar.write(f"**Account ID:** {account_info.get('account_id', 'Unknown')}")
-            st.sidebar.write(f"**Region:** {account_info.get('region', 'Unknown')}")
-            st.sidebar.write(f"**Environment:** {account_info.get('environment', 'Unknown')}")
-        
-        # Get EC2 instances for comprehensive monitoring
-        ec2_instances = st.session_state.cloudwatch_connector.get_ec2_sql_instances()
-        
-        for ec2 in ec2_instances:
-            instance_id = ec2['InstanceId']
-            
-            # Get SQL Server metrics
-            sql_metrics = st.session_state.cloudwatch_connector.get_comprehensive_sql_metrics(
-                instance_id, start_time, current_time
-            )
-            
-            # Get OS-level metrics if enabled
-            aws_config = st.session_state.cloudwatch_connector.aws_config
-            if aws_config.get('enable_os_metrics', True):
-                os_metrics = st.session_state.cloudwatch_connector.get_os_metrics(
-                    instance_id, start_time, current_time
-                )
-                
-                # Merge OS metrics with SQL metrics
-                for metric_key, metric_data in os_metrics.items():
-                    sql_metrics[f"os_{metric_key}"] = metric_data
-            
-            # Add to overall metrics with instance prefix
-            for metric_key, metric_data in sql_metrics.items():
-                all_metrics[f"{instance_id}_{metric_key}"] = metric_data
-        
-        # Get logs from configured log groups
-        aws_config = st.session_state.cloudwatch_connector.aws_config
-        if aws_config.get('log_groups'):
-            all_logs = st.session_state.cloudwatch_connector.get_sql_server_logs(
-                aws_config['log_groups'], 
-                hours=24
-            )
-    
-    except Exception as e:
-        logger.error(f"Error collecting metrics: {str(e)}")
-        st.error(f"Error collecting metrics: {str(e)}")
-    
-    return all_metrics, all_logs, ec2_instances
-
-def debug_ec2_instances():
-    """Debug function to find all EC2 instances and their tags"""
-    
-    if not st.session_state.cloudwatch_connector or st.session_state.cloudwatch_connector.demo_mode:
-        st.info("Connect to AWS first to see your EC2 instances")
-        return
-    
-    st.header("🔍 EC2 Instance Detective")
-    st.info("Let's find all your EC2 instances and see how they're tagged")
-    
-    if st.button("🕵️ Find All My EC2 Instances", type="primary"):
-        try:
-            ec2_client = st.session_state.cloudwatch_connector.aws_manager.get_client('ec2')
-            if not ec2_client:
-                st.error("No EC2 client available")
-                return
-            
-            with st.spinner("Searching for EC2 instances..."):
-                # Get ALL instances (no filters)
-                response = ec2_client.describe_instances()
-                
-                all_instances = []
-                for reservation in response['Reservations']:
-                    for instance in reservation['Instances']:
-                        all_instances.append(instance)
-                
-                if not all_instances:
-                    st.warning("🤷‍♂️ No EC2 instances found in your account")
-                    st.info("**Possible reasons:**")
-                    st.write("• You don't have any EC2 instances")
-                    st.write("• Your instances are in a different region")
-                    st.write("• You don't have ec2:DescribeInstances permission")
-                    return
-                
-                st.success(f"🎉 Found {len(all_instances)} EC2 instances!")
-                
-                # Show all instances with their tags
-                for i, instance in enumerate(all_instances):
-                    instance_id = instance['InstanceId']
-                    instance_type = instance['InstanceType']
-                    state = instance['State']['Name']
-                    
-                    # Get instance name from tags
-                    instance_name = "Unnamed"
-                    for tag in instance.get('Tags', []):
-                        if tag['Key'] == 'Name':
-                            instance_name = tag['Value']
-                            break
-                    
-                    # Color code by state
-                    if state == 'running':
-                        state_color = "🟢"
-                    elif state == 'stopped':
-                        state_color = "🟡"
-                    else:
-                        state_color = "🔴"
-                    
-                    st.markdown(f"### {state_color} Instance {i+1}: **{instance_name}**")
-                    
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.write(f"**Instance ID:** {instance_id}")
-                        st.write(f"**Type:** {instance_type}")
-                        st.write(f"**State:** {state}")
-                        st.write(f"**Private IP:** {instance.get('PrivateIpAddress', 'N/A')}")
-                    
-                    with col2:
-                        # Show all tags
-                        tags = instance.get('Tags', [])
-                        if tags:
-                            st.write("**Tags:**")
-                            for tag in tags:
-                                st.write(f"  • **{tag['Key']}:** {tag['Value']}")
-                        else:
-                            st.write("**Tags:** None")
-                    
-                    # Check if this instance would be detected as SQL Server
-                    sql_server_tags = ['SQLServer', 'SQL Server', 'Database', 'MSSQL', 'SqlServer']
-                    is_sql_server = False
-                    
-                    for tag in tags:
-                        if tag['Key'] == 'Application' and tag['Value'] in sql_server_tags:
-                            is_sql_server = True
-                            break
-                    
-                    if is_sql_server:
-                        st.success("✅ This instance WOULD be detected as SQL Server")
-                    else:
-                        st.error("❌ This instance would NOT be detected as SQL Server")
-                        st.info("💡 To make this a SQL Server instance, add tag: **Application = SQLServer**")
-                    
-                    # Option to tag this instance
-                    if not is_sql_server and state == 'running':
-                        with st.expander(f"🏷️ Tag {instance_name} as SQL Server"):
-                            st.write("Click the button below to add the SQL Server tag to this instance:")
-                            
-                            if st.button(f"🏷️ Tag as SQL Server", key=f"tag_{instance_id}"):
-                                try:
-                                    ec2_client.create_tags(
-                                        Resources=[instance_id],
-                                        Tags=[
-                                            {
-                                                'Key': 'Application',
-                                                'Value': 'SQLServer'
-                                            }
-                                        ]
-                                    )
-                                    st.success(f"✅ Successfully tagged {instance_name} as SQLServer!")
-                                    st.info("🔄 Refresh the page to see the updated tags")
-                                    
-                                except Exception as tag_error:
-                                    st.error(f"❌ Failed to tag instance: {tag_error}")
-                    
-                    st.markdown("---")
-                
-                # Summary
-                sql_instances = 0
-                for instance in all_instances:
-                    tags = instance.get('Tags', [])
-                    for tag in tags:
-                        if tag['Key'] == 'Application' and tag['Value'] in ['SQLServer', 'SQL Server', 'Database']:
-                            sql_instances += 1
-                            break
-                
-                st.subheader("📊 Summary")
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.metric("Total Instances", len(all_instances))
-                
-                with col2:
-                    running_instances = len([i for i in all_instances if i['State']['Name'] == 'running'])
-                    st.metric("Running Instances", running_instances)
-                
-                with col3:
-                    st.metric("SQL Server Tagged", sql_instances)
-                
-                if sql_instances == 0:
-                    st.warning("⚠️ **No instances are tagged for SQL Server detection**")
-                    st.info("**To fix this:** Add the tag `Application = SQLServer` to your SQL Server instances")
-                else:
-                    st.success(f"🎉 **{sql_instances} instances are properly tagged for SQL Server!**")
-        
-        except Exception as e:
-            st.error(f"❌ Failed to get EC2 instances: {e}")
-            
-            # Show helpful error messages
-            if "UnauthorizedOperation" in str(e):
-                st.error("🔒 **Permission Issue:** You don't have ec2:DescribeInstances permission")
-                st.info("**Ask your AWS admin to add this IAM permission:**")
-                st.code('"ec2:DescribeInstances"')
-            elif "AccessDenied" in str(e):
-                st.error("🔒 **Access Denied:** Check your IAM permissions")
-
-# =================== Tab Rendering Functions ===================
-def render_dashboard_tab(all_metrics, ec2_instances, rds_instances):
-    """Render the main dashboard tab"""
-    st.header("🏢 AWS SQL Server Infrastructure Overview")
-    
-    # Enhanced connection status banner for Streamlit Cloud
-    if st.session_state.cloudwatch_connector:
-        conn_status = st.session_state.cloudwatch_connector.get_connection_status()
-        
-        if conn_status.get('connected'):
-            if conn_status.get('demo_mode'):
-                st.info("🎭 **Demo Mode Active** - Using simulated data for demonstration purposes")
-                st.write("💡 **To connect to real AWS:** Set environment variables in Streamlit Cloud settings")
-            else:
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.success(f"✅ **Live AWS Connection** - Account: {conn_status.get('account_id', 'Unknown')}")
-                    st.write(f"**Method:** {safe_format_method(conn_status.get('method'))}")
-                with col2:
-                    if st.button("🔄 Refresh Connection"):
-                        st.session_state.cloudwatch_connector.test_connection()
-                        st.rerun()
-        else:
-            st.error("❌ **AWS Connection Failed** - Check credentials in sidebar")
-            if conn_status.get('error'):
-                with st.expander("🔍 View Connection Error"):
-                    st.error(conn_status['error'])
-                    
-                    if conn_status.get('streamlit_cloud'):
-                        st.info("""
-                        **Streamlit Cloud Troubleshooting:**
-                        1. Go to your app settings in Streamlit Cloud
-                        2. Add environment variables:
-                           - `AWS_ACCESS_KEY_ID`
-                           - `AWS_SECRET_ACCESS_KEY`
-                           - `AWS_DEFAULT_REGION`
-                        3. Restart your app
-                        """)
-    
-    # Infrastructure summary
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("RDS Instances", len(rds_instances))
-    
-    with col2:
-        ec2_running = len([i for i in ec2_instances if i.get('State', {}).get('Name') == 'running'])
-        st.metric("EC2 SQL Instances", f"{ec2_running}/{len(ec2_instances)}")
-    
-    with col3:
-        ag_count = len(st.session_state.always_on_monitor.get_availability_groups())
-        st.metric("Always On AGs", ag_count)
-    
-    with col4:
-        # Calculate average CPU across all instances
-        if all_metrics.get('cpu_usage'):
-            avg_cpu = np.mean([dp['Average'] for dp in all_metrics['cpu_usage'][-5:]])
-            cpu_color = "🔴" if avg_cpu > 80 else "🟡" if avg_cpu > 60 else "🟢"
-            st.metric(f"Avg CPU {cpu_color}", f"{avg_cpu:.1f}%")
-        else:
-            st.metric("Avg CPU", "N/A")
-    
-    st.markdown("---")
-    
-    # RDS Instances Overview
-    if rds_instances:
-        st.subheader("📊 RDS SQL Server Instances")
-        for rds in rds_instances:
-            status_color = "cluster-online" if rds['DBInstanceStatus'] == 'available' else "cluster-offline"
-            
-            st.markdown(f'<div class="{status_color}">📊 <strong>{rds["DBInstanceIdentifier"]}</strong> - {rds["DBInstanceStatus"].title()}</div>', 
-                       unsafe_allow_html=True)
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.write(f"**Engine:** {rds['Engine']}")
-            with col2:
-                st.write(f"**AZ:** {rds['AvailabilityZone']}")
-            with col3:
-                st.write(f"**Multi-AZ:** {'Yes' if rds.get('MultiAZ') else 'No'}")
-            with col4:
-                st.write(f"**Storage:** {rds.get('AllocatedStorage', 0)} GB")
-    
-    st.markdown("---")
-    
-    # EC2 Instances Overview
-    if ec2_instances:
-        st.subheader("🖥️ EC2 SQL Server Instances")
-        for ec2 in ec2_instances:
-            instance_name = "Unknown"
-            for tag in ec2.get('Tags', []):
-                if tag['Key'] == 'Name':
-                    instance_name = tag['Value']
-                    break
-            
-            status = ec2['State']['Name']
-            status_color = "cluster-online" if status == 'running' else "cluster-offline"
-            
-            st.markdown(f'<div class="{status_color}">🖥️ <strong>{instance_name}</strong> ({ec2["InstanceId"]}) - {status.title()}</div>', 
-                       unsafe_allow_html=True)
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.write(f"**Type:** {ec2['InstanceType']}")
-            with col2:
-                st.write(f"**Private IP:** {ec2.get('PrivateIpAddress', 'N/A')}")
-            with col3:
-                st.write(f"**State:** {status}")
-            with col4:
-                if st.button(f"Manage {instance_name}", key=f"manage_{ec2['InstanceId']}"):
-                    st.info(f"Management interface for {instance_name}")
-    
-    # Performance metrics charts
-    st.markdown("---")
-    st.subheader("📈 Real-time Performance Metrics")
-    
-    if all_metrics:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if all_metrics.get('cpu_usage'):
-                cpu_data = all_metrics['cpu_usage']
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=[dp['Timestamp'] for dp in cpu_data],
-                    y=[dp['Average'] for dp in cpu_data],
-                    name='CPU Usage %',
-                    line=dict(color='blue')
-                ))
-                fig.add_hline(y=80, line_dash="dash", line_color="orange", annotation_text="Warning (80%)")
-                fig.add_hline(y=90, line_dash="dash", line_color="red", annotation_text="Critical (90%)")
-                fig.update_layout(title="CPU Utilization", xaxis_title="Time", yaxis_title="CPU %", height=300)
-                st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            if all_metrics.get('memory_usage'):
-                memory_data = all_metrics['memory_usage']
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=[dp['Timestamp'] for dp in memory_data],
-                    y=[dp['Average'] for dp in memory_data],
-                    name='Memory Usage %',
-                    line=dict(color='green')
-                ))
-                fig.add_hline(y=85, line_dash="dash", line_color="orange", annotation_text="Warning (85%)")
-                fig.add_hline(y=95, line_dash="dash", line_color="red", annotation_text="Critical (95%)")
-                fig.update_layout(title="Memory Utilization", xaxis_title="Time", yaxis_title="Memory %", height=300)
-                st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("⚠️ No metrics data available. This could be due to:")
-        st.write("• CloudWatch agent not installed on instances")
-        st.write("• Custom metrics not configured")
-        st.write("• Insufficient permissions")
-        st.write("• Network connectivity issues")
-        
-        if st.session_state.cloudwatch_connector.demo_mode:
-            st.info("🎭 **Currently in Demo Mode** - Real metrics will appear when AWS is properly configured")
-
-def render_sql_metrics_tab(all_metrics, ec2_instances):
-    """Render SQL Server metrics tab"""
-    st.header("🗄️ Comprehensive SQL Server Database Metrics")
-    
-    # Instance selector for detailed metrics
-    if ec2_instances:
-        instance_options = {}
-        for ec2 in ec2_instances:
-            instance_name = "Unknown"
-            for tag in ec2.get('Tags', []):
-                if tag['Key'] == 'Name':
-                    instance_name = tag['Value']
-                    break
-            instance_options[f"{instance_name} ({ec2['InstanceId']})"] = ec2['InstanceId']
-        
-        selected_instance_display = st.selectbox("Select SQL Server Instance for Detailed Analysis", 
-                                                list(instance_options.keys()))
-        selected_instance = instance_options[selected_instance_display]
-        
-        st.markdown(f"### 📊 Detailed Metrics for {selected_instance_display}")
-        
-        # Check if we have metrics for this instance
-        instance_metrics = {k: v for k, v in all_metrics.items() if k.startswith(selected_instance)}
-        
-        if instance_metrics:
-            st.success(f"✅ Found {len(instance_metrics)} metric series for this instance")
-            
-            # Display key SQL Server metrics
-            col1, col2, col3, col4 = st.columns(4)
-            
-            # Buffer Cache Hit Ratio
-            buffer_cache_key = f"{selected_instance}_buffer_cache_hit_ratio"
-            if buffer_cache_key in all_metrics and all_metrics[buffer_cache_key]:
-                current_value = all_metrics[buffer_cache_key][-1]['Average']
-                color = "🟢" if current_value > 95 else "🟡" if current_value > 90 else "🔴"
-                with col1:
-                    st.metric(f"Buffer Cache Hit Ratio {color}", f"{current_value:.2f}%")
-            
-            # User Connections
-            connections_key = f"{selected_instance}_user_connections"
-            if connections_key in all_metrics and all_metrics[connections_key]:
-                current_value = all_metrics[connections_key][-1]['Average']
-                with col2:
-                    st.metric("User Connections", f"{current_value:.0f}")
-            
-            # Batch Requests/sec
-            batch_key = f"{selected_instance}_batch_requests_per_sec"
-            if batch_key in all_metrics and all_metrics[batch_key]:
-                current_value = all_metrics[batch_key][-1]['Average']
-                with col3:
-                    st.metric("Batch Requests/sec", f"{current_value:.0f}")
-            
-            # Deadlocks/sec
-            deadlock_key = f"{selected_instance}_deadlocks_per_sec"
-            if deadlock_key in all_metrics and all_metrics[deadlock_key]:
-                current_value = all_metrics[deadlock_key][-1]['Average']
-                color = "🔴" if current_value > 0.1 else "🟡" if current_value > 0 else "🟢"
-                with col4:
-                    st.metric(f"Deadlocks/sec {color}", f"{current_value:.3f}")
-            
-            # Chart showing SQL Server performance over time
-            if buffer_cache_key in all_metrics and all_metrics[buffer_cache_key]:
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=[dp['Timestamp'] for dp in all_metrics[buffer_cache_key]],
-                    y=[dp['Average'] for dp in all_metrics[buffer_cache_key]],
-                    name='Buffer Cache Hit Ratio %',
-                    line=dict(color='blue')
-                ))
-                fig.update_layout(title="SQL Server Buffer Cache Hit Ratio", 
-                                xaxis_title="Time", yaxis_title="Hit Ratio %")
-                st.plotly_chart(fig, use_container_width=True)
-        
-        else:
-            st.warning(f"⚠️ No SQL Server metrics found for instance {selected_instance}")
-            st.info("This could be because:")
-            st.write("• CloudWatch agent is not configured for SQL Server metrics")
-            st.write("• Custom SQL Server performance counters are not set up")
-            st.write("• The instance may not be running SQL Server")
-            st.write("• Metrics collection may not have started yet")
-            
-            if st.session_state.cloudwatch_connector.demo_mode:
-                st.info("🎭 **Demo Mode:** Real metrics will appear when connected to AWS")
-    
-    else:
-        st.warning("No EC2 SQL Server instances found. Please ensure instances are properly tagged.")
-        
-        if st.session_state.cloudwatch_connector.demo_mode:
-            st.info("🎭 **Demo Mode:** Real instances will appear when connected to AWS")
-
-def render_os_metrics_tab(all_metrics, ec2_instances):
-    """Render OS metrics tab"""
-    st.header("🖥️ Operating System Metrics")
-    
-    if ec2_instances:
-        # Instance selector
-        instance_options = {}
-        for ec2 in ec2_instances:
-            instance_name = "Unknown"
-            for tag in ec2.get('Tags', []):
-                if tag['Key'] == 'Name':
-                    instance_name = tag['Value']
-                    break
-            instance_options[f"{instance_name} ({ec2['InstanceId']})"] = ec2['InstanceId']
-        
-        selected_instance_display = st.selectbox("Select Instance for OS Metrics", 
-                                                list(instance_options.keys()))
-        selected_instance = instance_options[selected_instance_display]
-        
-        st.markdown(f"### 🖥️ OS Metrics for {selected_instance_display}")
-        
-        # Check for OS metrics
-        os_metrics = {k: v for k, v in all_metrics.items() if k.startswith(f"{selected_instance}_os_")}
-        
-        if os_metrics:
-            # Display current OS metrics
-            col1, col2, col3, col4 = st.columns(4)
-            
-            # CPU metrics
-            cpu_key = f"{selected_instance}_os_cpu_usage_active"
-            if cpu_key in all_metrics and all_metrics[cpu_key]:
-                current_cpu = all_metrics[cpu_key][-1]['Average']
-                color = "🔴" if current_cpu > 80 else "🟡" if current_cpu > 60 else "🟢"
-                with col1:
-                    st.metric(f"CPU Usage {color}", f"{current_cpu:.1f}%")
-            
-            # Memory metrics
-            mem_key = f"{selected_instance}_os_mem_used_percent"
-            if mem_key in all_metrics and all_metrics[mem_key]:
-                current_mem = all_metrics[mem_key][-1]['Average']
-                color = "🔴" if current_mem > 90 else "🟡" if current_mem > 80 else "🟢"
-                with col2:
-                    st.metric(f"Memory Used {color}", f"{current_mem:.1f}%")
-            
-            # Disk metrics
-            disk_key = f"{selected_instance}_os_disk_used_percent"
-            if disk_key in all_metrics and all_metrics[disk_key]:
-                current_disk = all_metrics[disk_key][-1]['Average']
-                color = "🔴" if current_disk > 90 else "🟡" if current_disk > 80 else "🟢"
-                with col3:
-                    st.metric(f"Disk Used {color}", f"{current_disk:.1f}%")
-            
-            # Load average
-            load_key = f"{selected_instance}_os_system_load1"
-            if load_key in all_metrics and all_metrics[load_key]:
-                current_load = all_metrics[load_key][-1]['Average']
-                color = "🔴" if current_load > 4 else "🟡" if current_load > 2 else "🟢"
-                with col4:
-                    st.metric(f"Load Average {color}", f"{current_load:.2f}")
-            
-            # OS Performance chart
-            if cpu_key in all_metrics and mem_key in all_metrics:
-                fig = make_subplots(
-                    rows=2, cols=1,
-                    subplot_titles=('CPU Usage %', 'Memory Usage %'),
-                    shared_xaxes=True
-                )
-                
-                fig.add_trace(
-                    go.Scatter(
-                        x=[dp['Timestamp'] for dp in all_metrics[cpu_key]],
-                        y=[dp['Average'] for dp in all_metrics[cpu_key]],
-                        name='CPU %',
-                        line=dict(color='blue')
-                    ),
-                    row=1, col=1
-                )
-                
-                fig.add_trace(
-                    go.Scatter(
-                        x=[dp['Timestamp'] for dp in all_metrics[mem_key]],
-                        y=[dp['Average'] for dp in all_metrics[mem_key]],
-                        name='Memory %',
-                        line=dict(color='green')
-                    ),
-                    row=2, col=1
-                )
-                
-                fig.update_layout(height=500, title_text="OS Performance Trends")
-                st.plotly_chart(fig, use_container_width=True)
-        
-        else:
-            st.warning(f"⚠️ No OS metrics found for instance {selected_instance}")
-            st.info("This could be because:")
-            st.write("• CloudWatch agent is not installed")
-            st.write("• OS metrics collection is not enabled")
-            st.write("• Instance may not be running")
-            
-            if st.session_state.cloudwatch_connector.demo_mode:
-                st.info("🎭 **Demo Mode:** Real OS metrics will appear when connected to AWS")
-    
-    else:
-        st.warning("No EC2 instances found for OS metrics monitoring.")
-
-def render_always_on_tab():
-    """Render Always On Availability Groups tab"""
-    st.header("🔄 Always On Availability Groups")
-    
-    # Get AG information
-    availability_groups = st.session_state.always_on_monitor.get_availability_groups()
-    
-    if availability_groups:
-        for ag in availability_groups:
-            # AG Status Header
-            sync_status = ag['synchronization_health']
-            status_color = "cluster-online" if sync_status == 'HEALTHY' else "cluster-degraded" if sync_status == 'PARTIALLY_HEALTHY' else "cluster-offline"
-            
-            st.markdown(f'<div class="{status_color}">🔄 <strong>{ag["name"]}</strong> - {sync_status}</div>', 
-                       unsafe_allow_html=True)
-            
-            # AG Details
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.write(f"**Primary Replica:** {ag['primary_replica']}")
-                st.write(f"**Role Health:** {ag['role_health']}")
-            
-            with col2:
-                st.write(f"**Secondary Replicas:** {len(ag['secondary_replicas'])}")
-                for replica in ag['secondary_replicas']:
-                    st.write(f"  • {replica}")
-            
-            with col3:
-                st.write(f"**Databases:** {len(ag['databases'])}")
-                for db in ag['databases']:
-                    st.write(f"  • {db}")
-            
-            # Replica Health Details
-            with st.expander(f"🔍 Detailed Health - {ag['name']}"):
-                replica_data = []
-                
-                # Primary replica
-                primary_health = st.session_state.always_on_monitor.get_replica_health(ag['primary_replica'])
-                replica_data.append(primary_health)
-                
-                # Secondary replicas
-                for replica in ag['secondary_replicas']:
-                    secondary_health = st.session_state.always_on_monitor.get_replica_health(replica)
-                    replica_data.append(secondary_health)
-                
-                # Display replica health table
-                if replica_data:
-                    replica_df = pd.DataFrame(replica_data)
-                    st.dataframe(replica_df, use_container_width=True)
-            
-            # Synchronization Lag
-            st.subheader(f"📊 Synchronization Status - {ag['name']}")
-            sync_lag = st.session_state.always_on_monitor.check_synchronization_lag()
-            
-            if sync_lag:
-                lag_df = pd.DataFrame(sync_lag)
-                
-                # Color code based on lag
-                def lag_color(lag_seconds):
-                    if lag_seconds < 1:
-                        return "🟢"
-                    elif lag_seconds < 5:
-                        return "🟡"
-                    else:
-                        return "🔴"
-                
-                lag_df['Status'] = lag_df['lag_seconds'].apply(lag_color)
-                st.dataframe(lag_df, use_container_width=True)
-                
-                # Alert on high lag
-                high_lag_dbs = lag_df[lag_df['lag_seconds'] > 5]
-                if not high_lag_dbs.empty:
-                    st.warning(f"⚠️ High synchronization lag detected for {len(high_lag_dbs)} databases")
-            
-            st.markdown("---")
-    
-    else:
-        st.info("📝 No Always On Availability Groups detected in your environment")
-        st.write("**To set up Always On monitoring:**")
-        st.write("1. Ensure CloudWatch agent is installed on SQL Server instances")
-        st.write("2. Configure custom metrics for Always On DMVs")
-        st.write("3. Set up appropriate IAM permissions")
-        
-        if st.session_state.cloudwatch_connector.demo_mode:
-            st.info("🎭 **Demo Mode:** Real Always On groups will appear when connected to AWS")
-
-def render_auto_remediation_tab(all_metrics, enable_auto_remediation):
-    """Render auto-remediation tab"""
-    st.header("🤖 Intelligent Auto-Remediation")
-    
-    if enable_auto_remediation:
-        # Evaluate current conditions for remediation
-        current_alerts = []
-        remediation_actions = st.session_state.auto_remediation.evaluate_conditions(all_metrics, current_alerts)
-        
-        if remediation_actions:
-            st.subheader("🚨 Remediation Actions Required")
-            
-            for action in remediation_actions:
-                severity_color = {
-                    'Critical': 'alert-critical',
-                    'High': 'alert-warning',
-                    'Medium': 'alert-warning',
-                    'Low': 'metric-card'
-                }.get(action['severity'], 'metric-card')
-                
-                st.markdown(f"""
-                <div class="{severity_color}">
-                    <strong>🔧 {action['rule_name'].replace('_', ' ').title()}</strong><br>
-                    <strong>Severity:</strong> {action['severity']}<br>
-                    <strong>Estimated Impact:</strong> {action['estimated_impact']}<br>
-                    <strong>Proposed Actions:</strong> {', '.join(action['actions'])}<br>
-                    <strong>Auto-Execute:</strong> {'Yes' if action['auto_execute'] else 'Manual Approval Required'}
-                </div>
-                """, unsafe_allow_html=True)
-                
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    if action['auto_execute']:
-                        if st.button(f"🤖 Auto-Execute", key=f"auto_{action['rule_name']}"):
-                            with st.spinner("Executing remediation..."):
-                                result = st.session_state.auto_remediation.execute_remediation(action)
-                                if result['status'] == 'success':
-                                    st.success(f"✅ {result['message']}")
-                                else:
-                                    st.error(f"❌ {result['message']}")
-                
-                with col2:
-                    if st.button(f"👁️ Preview Actions", key=f"preview_{action['rule_name']}"):
-                        st.info(f"Would execute: {', '.join(action['actions'])}")
-                
-                with col3:
-                    if st.button(f"⏸️ Postpone", key=f"postpone_{action['rule_name']}"):
-                        st.info("Action postponed for 1 hour")
-                
-                st.markdown("---")
-        
-        else:
-            st.success("🎉 No immediate remediation actions required!")
-            st.info("All systems are operating within normal parameters.")
-            
-            # Show remediation history if available
-            if st.session_state.auto_remediation.remediation_history:
-                with st.expander("📋 Recent Remediation History"):
-                    for entry in st.session_state.auto_remediation.remediation_history[-5:]:
-                        st.write(f"**{entry['executed_at'].strftime('%Y-%m-%d %H:%M:%S')}** - {entry['action']['rule_name']}")
-    
-    else:
-        st.warning("🔒 Auto-remediation is currently disabled")
-        st.info("Enable auto-remediation in the sidebar to see available actions and configure automated responses to system issues.")
-        
-        # Show configuration options
-        with st.expander("⚙️ Auto-Remediation Configuration"):
-            st.write("**Available Remediation Rules:**")
-            for rule_name, rule_config in st.session_state.auto_remediation.remediation_rules.items():
-                st.write(f"• **{rule_name.replace('_', ' ').title()}**: Threshold {rule_config['threshold']}")
-
-def render_predictive_analytics_tab(all_metrics, enable_predictive_alerts):
-    """Render predictive analytics tab"""
-    st.header("🔮 Predictive Analytics & Forecasting")
-    
-    if enable_predictive_alerts:
-        # Analyze trends
-        trend_analysis = st.session_state.predictive_analytics.analyze_trends(all_metrics, days=30)
-        
-        if trend_analysis:
-            st.subheader("📊 Performance Trend Analysis")
-            
-            # Filter out metrics with insufficient data
-            valid_analyses = {k: v for k, v in trend_analysis.items() if v.get('status') == 'analyzed'}
-            
-            if valid_analyses:
-                for metric_name, analysis in list(valid_analyses.items())[:5]:  # Show top 5
-                    col1, col2 = st.columns([3, 1])
-                    
-                    with col1:
-                        # Create prediction visualization
-                        if all_metrics.get(metric_name):
-                            historical_data = all_metrics[metric_name]
-                            predicted_values = analysis['future_prediction']
-                            
-                            fig = go.Figure()
-                            
-                            # Historical data
-                            fig.add_trace(go.Scatter(
-                                x=[dp['Timestamp'] for dp in historical_data],
-                                y=[dp['Average'] for dp in historical_data],
-                                name='Historical',
-                                line=dict(color='blue')
-                            ))
-                            
-                            # Predicted data
-                            future_timestamps = [
-                                datetime.now() + timedelta(hours=i) 
-                                for i in range(len(predicted_values))
-                            ]
-                            
-                            fig.add_trace(go.Scatter(
-                                x=future_timestamps,
-                                y=predicted_values,
-                                name='Predicted',
-                                line=dict(color='red', dash='dash')
-                            ))
-                            
-                            fig.update_layout(
-                                title=f"{metric_name.replace('_', ' ').title()} - Trend Analysis",
-                                xaxis_title="Time",
-                                yaxis_title="Value",
-                                height=300
-                            )
-                            
-                            st.plotly_chart(fig, use_container_width=True)
-                    
-                    with col2:
-                        # Analysis summary
-                        risk_colors = {
-                            'critical': '🔴',
-                            'warning': '🟡',
-                            'low': '🟢'
-                        }
-                        
-                        trend_colors = {
-                            'increasing': '📈',
-                            'decreasing': '📉',
-                            'stable': '➡️'
-                        }
-                        
-                        st.metric(
-                            f"Risk Level {risk_colors.get(analysis['risk_level'], '🔵')}", 
-                            analysis['risk_level'].title()
-                        )
-                        
-                        st.metric(
-                            f"Trend {trend_colors.get(analysis['trend'], '➡️')}", 
-                            analysis['trend'].title()
-                        )
-                        
-                        st.metric(
-                            "Confidence", 
-                            f"{analysis['confidence']*100:.0f}%"
-                        )
-                    
-                    # Recommendations
-                    if analysis.get('recommendations'):
-                        st.write(f"**🎯 Recommendations for {metric_name.replace('_', ' ').title()}:**")
-                        for rec in analysis['recommendations'][:3]:  # Show top 3
-                            st.write(f"• {rec}")
-                    
-                    st.markdown("---")
-            
-            else:
-                st.warning("⚠️ Insufficient data for trend analysis")
-                st.info("Need at least 10 data points per metric for reliable predictions")
-        
-        # Capacity Planning
-        st.subheader("📈 Capacity Planning Insights")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write("**🔮 30-Day Forecast:**")
-            
-            # Generate capacity predictions based on available data
-            capacity_predictions = {}
-            for metric_name in ['cpu_usage', 'memory_usage', 'disk_usage']:
-                if metric_name in all_metrics and all_metrics[metric_name]:
-                    current = all_metrics[metric_name][-1]['Average']
-                    # Simple trend calculation
-                    if len(all_metrics[metric_name]) > 5:
-                        recent_values = [dp['Average'] for dp in all_metrics[metric_name][-5:]]
-                        trend = (recent_values[-1] - recent_values[0]) / len(recent_values)
-                        predicted = current + (trend * 30)  # 30 days
-                        trend_direction = 'increasing' if trend > 0.5 else 'decreasing' if trend < -0.5 else 'stable'
-                    else:
-                        predicted = current
-                        trend_direction = 'stable'
-                    
-                    capacity_predictions[metric_name] = {
-                        'current': current,
-                        'predicted': predicted,
-                        'trend': trend_direction
-                    }
-            
-            for resource, data in capacity_predictions.items():
-                trend_icon = {'increasing': '📈', 'decreasing': '📉', 'stable': '➡️'}[data['trend']]
-                color = '🔴' if data['predicted'] > 90 else '🟡' if data['predicted'] > 80 else '🟢'
-                
-                st.write(f"{color} **{resource.replace('_', ' ').title()}:** {data['current']:.1f}% → {data['predicted']:.1f}% {trend_icon}")
-        
-        with col2:
-            st.write("**⚠️ Capacity Recommendations:**")
-            recommendations = []
-            
-            for resource, data in capacity_predictions.items():
-                if data['predicted'] > 90:
-                    recommendations.append(f"• Urgent: Scale {resource.replace('_', ' ')} capacity")
-                elif data['predicted'] > 80:
-                    recommendations.append(f"• Plan: Monitor {resource.replace('_', ' ')} usage closely")
-            
-            if recommendations:
-                for rec in recommendations:
-                    st.write(rec)
-            else:
-                st.write("• ✅ All resources within normal capacity projections")
-    
-    else:
-        st.warning("🔒 Predictive analytics is currently disabled")
-        st.info("Enable predictive alerts in the sidebar to see trend analysis and capacity planning insights.")
-
-def render_alerts_tab(all_metrics, all_logs):
-    """Render alerts tab with configuration-based alerts"""
-    st.header("🚨 Intelligent Alert Management")
-    
-    # NEW: Add configuration-based alerts FIRST
-    config_manager = get_embedded_config_manager()
-    if all_logs:
-        config_alerts = generate_alerts_from_config(all_logs, config_manager)
-        
-        if config_alerts:
-            st.subheader("⚙️ Configuration-Based Alerts")
-            st.info(f"🔍 Found {len(config_alerts)} alerts based on configured patterns")
-            
-            for alert in config_alerts[:5]:  # Show first 5 alerts
-                severity_style = "alert-critical" if alert['severity'] == 'critical' else "alert-warning"
-                st.markdown(f"""
-                <div class="{severity_style}">
-                    <strong>🚨 {alert['severity'].upper()}</strong> - {alert['instance']}<br>
-                    <strong>📍 Source:</strong> {alert['source']}<br>
-                    <strong>🎯 Pattern:</strong> {alert['pattern_matched']}<br>
-                    <strong>💬 Message:</strong> {alert['message']}<br>
-                    <strong>⏰ Time:</strong> {alert['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}<br>
-                    <strong>🤖 Auto-Remediation:</strong> {alert['auto_remediation']}
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Show original log message
-                with st.expander(f"📝 View Original Log Message"):
-                    st.code(alert['original_message'])
-                
-                st.markdown("---")
-            
-            if len(config_alerts) > 5:
-                st.info(f"💡 Showing 5 of {len(config_alerts)} total alerts. Check individual log groups for more details.")
-    
-    # EXISTING CODE CONTINUES BELOW (keep everything as-is)
-    
-    # Generate current alerts based on metrics
-    current_alerts = []
-    
-    # Check for critical conditions
-    if all_metrics.get('cpu_usage'):
-        latest_cpu = all_metrics['cpu_usage'][-1]['Average']
-        if latest_cpu > 90:
-            current_alerts.append({
-                'timestamp': datetime.now(),
-                'severity': 'critical',
-                'source': 'CloudWatch',
-                'instance': 'System Average',
-                'message': f'Critical CPU utilization detected ({latest_cpu:.1f}%)',
-                'auto_remediation': 'Available'
-            })
-        elif latest_cpu > 80:
-            current_alerts.append({
-                'timestamp': datetime.now(),
-                'severity': 'warning',
-                'source': 'CloudWatch',
-                'instance': 'System Average',
-                'message': f'High CPU utilization detected ({latest_cpu:.1f}%)',
-                'auto_remediation': 'Available'
-            })
-    
-    # Add demo alerts for demonstration
-    if st.session_state.cloudwatch_connector.demo_mode:
-        demo_alerts = [
-            {
-                'timestamp': datetime.now() - timedelta(minutes=5),
-                'severity': 'warning',
-                'source': 'Always On Monitor',
-                'instance': 'AG-Production',
-                'message': 'Synchronization lag detected (3.2 seconds)',
-                'auto_remediation': 'Manual'
-            },
-            {
-                'timestamp': datetime.now() - timedelta(hours=1),
-                'severity': 'info',
-                'source': 'Predictive Analytics',
-                'instance': 'sql-server-prod-2',
-                'message': 'Memory usage trend increasing - action recommended within 24h',
-                'auto_remediation': 'Scheduled'
-            }
-        ]
-        current_alerts.extend(demo_alerts)
-    
-    # Alert summary
-    col1, col2, col3, col4 = st.columns(4)
-    
-    critical_alerts = [a for a in current_alerts if a['severity'] == 'critical']
-    warning_alerts = [a for a in current_alerts if a['severity'] == 'warning']
-    info_alerts = [a for a in current_alerts if a['severity'] == 'info']
-    
-    with col1:
-        st.metric("🔴 Critical", len(critical_alerts))
-    
-    with col2:
-        st.metric("🟡 Warning", len(warning_alerts))
-    
-    with col3:
-        st.metric("🔵 Info", len(info_alerts))
-    
-    with col4:
-        auto_remediated = [a for a in current_alerts if a['auto_remediation'] == 'Available']
-        st.metric("🤖 Auto-Remediation", len(auto_remediated))
-    
-    st.markdown("---")
-    
-    # Alert list
-    if current_alerts:
-        st.subheader("📋 Active Alerts")
-        
-        for alert in current_alerts:
-            severity_styles = {
-                'critical': 'alert-critical',
-                'warning': 'alert-warning',
-                'info': 'claude-insight'
-            }
-            
-            style_class = severity_styles.get(alert['severity'], 'metric-card')
-            timestamp_str = alert['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
-            
-            st.markdown(f"""
-            <div class="{style_class}">
-                <strong>{alert['severity'].upper()}</strong> - {alert['instance']}<br>
-                <strong>Source:</strong> {alert['source']}<br>
-                <strong>Message:</strong> {alert['message']}<br>
-                <strong>Time:</strong> {timestamp_str}<br>
-                <strong>Auto-Remediation:</strong> {alert['auto_remediation']}
-            </div>
-            """, unsafe_allow_html=True)
-            
-            if alert['severity'] == 'critical':
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    if st.button(f"🔧 Remediate", key=f"remediate_{alert['instance']}_{alert['timestamp']}"):
-                        st.success("Remediation action initiated")
-                with col2:
-                    if st.button(f"📞 Escalate", key=f"escalate_{alert['instance']}_{alert['timestamp']}"):
-                        st.info("Alert escalated to on-call engineer")
-                with col3:
-                    if st.button(f"✅ Acknowledge", key=f"ack_{alert['instance']}_{alert['timestamp']}"):
-                        st.info("Alert acknowledged")
-    
-    else:
-        st.success("🎉 No active alerts!")
-        st.info("All monitored systems are operating normally.")
-    
-    # Enhanced logs display
-    st.markdown("---")
-    st.subheader("📝 CloudWatch Logs Analysis")
-    
-    if all_logs:
-        # Log group selector
-        selected_log_group = st.selectbox(
-            "Select Log Group", 
-            list(all_logs.keys())
-        )
-        
-        if selected_log_group and all_logs[selected_log_group]:
-            logs = all_logs[selected_log_group]
-            
-            # Log filters
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                log_level = st.selectbox("Filter by Level", 
-                                    ["All", "Error", "Warning", "Info"])
-            with col2:
-                search_term = st.text_input("Search in logs")
-            with col3:
-                max_logs = st.slider("Max logs to display", 10, 100, 20)
-            
-            # Filter logs
-            filtered_logs = logs[:max_logs]
-            if search_term:
-                filtered_logs = [log for log in filtered_logs 
-                            if search_term.lower() in log['message'].lower()]
-            
-            # Display logs
-            for log in filtered_logs:
-                timestamp = datetime.fromtimestamp(log['timestamp'] / 1000)
-                st.text(f"[{timestamp}] {log['message']}")
-    
-    else:
-        st.info("No log data available. Configure log groups in the sidebar.")
-
-def render_performance_tab(all_metrics):
-    """Render performance analytics tab"""
-    st.header("📊 Advanced Performance Analytics")
-    
-    # Performance overview
-    if all_metrics:
-        st.subheader("🎯 Performance Overview")
-        
-        # Create performance score
-        scores = {}
-        if all_metrics.get('cpu_usage'):
-            avg_cpu = np.mean([dp['Average'] for dp in all_metrics['cpu_usage'][-5:]])
-            scores['CPU'] = max(0, 100 - avg_cpu)
-        
-        if all_metrics.get('memory_usage'):
-            avg_memory = np.mean([dp['Average'] for dp in all_metrics['memory_usage'][-5:]])
-            scores['Memory'] = max(0, 100 - avg_memory)
-        
-        # Performance score visualization
-        if scores:
-            fig = go.Figure(go.Bar(
-                x=list(scores.keys()),
-                y=list(scores.values()),
-                marker_color=['green' if v > 70 else 'orange' if v > 50 else 'red' for v in scores.values()]
-            ))
-            
-            fig.update_layout(
-                title="Performance Scores (Higher is Better)",
-                yaxis_title="Score",
-                height=300
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-        
-        # Detailed metrics
-        st.subheader("📈 Detailed Performance Metrics")
-        
-        metric_tabs = st.tabs(["CPU", "Memory", "Disk", "Network"])
-        
-        with metric_tabs[0]:
-            if all_metrics.get('cpu_usage'):
-                cpu_data = all_metrics['cpu_usage']
-                
-                # CPU trend chart
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=[dp['Timestamp'] for dp in cpu_data],
-                    y=[dp['Average'] for dp in cpu_data],
-                    name='CPU Usage %',
-                    line=dict(color='blue')
-                ))
-                
-                # Add trend line
-                values = [dp['Average'] for dp in cpu_data]
-                x_vals = list(range(len(values)))
-                z = np.polyfit(x_vals, values, 1)
-                p = np.poly1d(z)
-                
-                fig.add_trace(go.Scatter(
-                    x=[dp['Timestamp'] for dp in cpu_data],
-                    y=p(x_vals),
-                    name='Trend',
-                    line=dict(color='red', dash='dash')
-                ))
-                
-                fig.update_layout(title="CPU Utilization with Trend", height=400)
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # CPU statistics
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Current", f"{values[-1]:.1f}%")
-                with col2:
-                    st.metric("Average", f"{np.mean(values):.1f}%")
-                with col3:
-                    st.metric("Peak", f"{max(values):.1f}%")
-                with col4:
-                    st.metric("Trend", "Increasing" if z[0] > 0 else "Decreasing")
-        
-        with metric_tabs[1]:
-            if all_metrics.get('memory_usage'):
-                st.info("Memory analysis would be displayed here with similar trending and statistics")
-        
-        with metric_tabs[2]:
-            st.info("Disk I/O metrics and analysis would be displayed here")
-        
-        with metric_tabs[3]:
-            st.info("Network performance metrics would be displayed here")
-    
-    else:
-        st.warning("No performance metrics available. Check CloudWatch configuration.")
-        
-        if st.session_state.cloudwatch_connector.demo_mode:
-            st.info("🎭 **Demo Mode:** Real performance data will appear when connected to AWS")
-
-def render_reports_tab():
-    """Render reports tab"""
-    st.header("📈 Executive Reports & Analytics")
-    
-    # Report selector
-    report_type = st.selectbox("Select Report Type", [
-        "Executive Summary",
-        "Performance Report",
-        "Availability Report",
-        "Capacity Planning",
-        "Security Assessment",
-        "Cost Analysis"
-    ])
-    
-    if report_type == "Executive Summary":
-        st.subheader("📊 Executive Summary Report")
-        
-        # Calculate metrics for summary
-        system_health = 87
-        all_metrics = {}  # Initialize as empty dict
-        if hasattr(st.session_state, 'cloudwatch_connector') and st.session_state.cloudwatch_connector:
-            try:
-                # Try to get metrics if available
-                all_metrics, _, _ = collect_comprehensive_metrics()
-                if all_metrics.get('cpu_usage') and all_metrics.get('memory_usage'):
-                    avg_cpu = np.mean([dp['Average'] for dp in all_metrics['cpu_usage'][-10:]])
-                    avg_mem = np.mean([dp['Average'] for dp in all_metrics['memory_usage'][-10:]])
-                    system_health = max(0, 100 - ((avg_cpu + avg_mem) / 2))
-            except:
-                pass  # Use default value if metrics unavailable
-        
-        # Key metrics summary
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.markdown(f"""
-            <div class="metric-card">
-                <h3>🎯 System Health</h3>
-                <p><strong>Overall Score:</strong> {system_health:.0f}/100</p>
-                <p><strong>Availability:</strong> 99.95%</p>
-                <p><strong>Performance:</strong> {'Good' if system_health > 70 else 'Poor'}</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col2:
-            remediation_count = 0
-            st.markdown(f"""
-            <div class="metric-card">
-                <h3>🔧 Maintenance</h3>
-                <p><strong>Active Alerts:</strong> {remediation_count}</p>
-                <p><strong>Auto-Remediated:</strong> 15 issues</p>
-                <p><strong>Manual Actions:</strong> 2 pending</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        with col3:
-            st.markdown("""
-            <div class="metric-card">
-                <h3>💰 Cost Optimization</h3>
-                <p><strong>Potential Savings:</strong> $2,400/month</p>
-                <p><strong>Right-sizing:</strong> 3 opportunities</p>
-                <p><strong>Efficiency:</strong> 85%</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Recommendations
-        st.subheader("💡 Key Recommendations")
-        recommendations = [
-            "**Monitor CPU utilization** - Currently averaging above baseline",
-            "**Optimize backup strategy** - Consider incremental backups for large databases",
-            "**Review Always On configuration** - Ensure optimal synchronization",
-            "**Implement automated scaling** - Based on predictive analytics"
-        ]
-        
-        for rec in recommendations:
-            st.write(f"• {rec}")
-        
-    elif report_type == "Performance Report":
-        st.subheader("📊 Detailed Performance Report")
-        
-        # Performance summary table
-        performance_data = []
-        all_metrics = {}  # Initialize as empty dict
-        
-        try:
-            all_metrics, _, _ = collect_comprehensive_metrics()
-        except:
-            pass  # Use defaults if metrics unavailable
-        
-        if all_metrics.get('cpu_usage'):
-            avg_cpu = np.mean([dp['Average'] for dp in all_metrics['cpu_usage'][-10:]])
-            performance_data.append({
-                'Metric': 'Average CPU Usage',
-                'Current': f'{avg_cpu:.1f}%',
-                'Target': '<70%',
-                'Status': '🟢 Good' if avg_cpu < 70 else '🟡 Monitor' if avg_cpu < 85 else '🔴 Critical'
-            })
-        
-        if all_metrics.get('memory_usage'):
-            avg_memory = np.mean([dp['Average'] for dp in all_metrics['memory_usage'][-10:]])
-            performance_data.append({
-                'Metric': 'Average Memory Usage',
-                'Current': f'{avg_memory:.1f}%',
-                'Target': '<85%',
-                'Status': '🟢 Good' if avg_memory < 85 else '🟡 Monitor' if avg_memory < 95 else '🔴 Critical'
-            })
-        
-        # Add default entries for demo
-        performance_data.extend([
-            {'Metric': 'Disk I/O Latency', 'Current': '12ms', 'Target': '<15ms', 'Status': '🟢 Good'},
-            {'Metric': 'AG Sync Lag', 'Current': '2.1s', 'Target': '<5s', 'Status': '🟢 Good'},
-            {'Metric': 'Backup Success Rate', 'Current': '99.2%', 'Target': '>99%', 'Status': '🟢 Good'}
-        ])
-        
-        if performance_data:
-            performance_df = pd.DataFrame(performance_data)
-            st.dataframe(performance_df, use_container_width=True)
-        
-    elif report_type == "Capacity Planning":
-        st.subheader("📈 Capacity Planning Report")
-        
-        # Capacity projections
-        capacity_data = {
-            'Resource': ['CPU', 'Memory', 'Storage', 'Connections'],
-            'Current Usage': [68, 82, 45, 85],
-            '30-Day Projection': [75, 85, 52, 92],
-            '90-Day Projection': [82, 88, 65, 98],
-            'Action Required': ['Monitor', 'Plan Upgrade', 'Expand Storage', 'Optimize Pooling']
-        }
-        
-        capacity_df = pd.DataFrame(capacity_data)
-        st.dataframe(capacity_df, use_container_width=True)
-        
-        # Capacity visualization
-        fig = go.Figure()
-        
-        fig.add_trace(go.Bar(
-            name='Current',
-            x=capacity_data['Resource'],
-            y=capacity_data['Current Usage']
-        ))
-        
-        fig.add_trace(go.Bar(
-            name='30-Day Projection',
-            x=capacity_data['Resource'],
-            y=capacity_data['30-Day Projection']
-        ))
-        
-        fig.add_trace(go.Bar(
-            name='90-Day Projection',
-            x=capacity_data['Resource'],
-            y=capacity_data['90-Day Projection']
-        ))
-        
-        fig.update_layout(
-            title="Capacity Utilization Projections",
-            xaxis_title="Resource",
-            yaxis_title="Usage %",
-            barmode='group'
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-    
-    else:
-        st.info(f"Report type '{report_type}' would be displayed here")
-    
-    # Export options
-    st.markdown("---")
-    st.subheader("📥 Export Options")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("📊 Export to Excel"):
-            st.info("Excel report would be generated and downloaded")
-    
-    with col2:
-        if st.button("📄 Generate PDF"):
-            st.info("PDF report would be generated and downloaded")
-    
-    with col3:
-        if st.button("📧 Email Report"):
-            st.info("Report would be emailed to stakeholders")
-
-# =================== Main Application ===================
-def main():
-    # Load CSS styles
-    load_css_styles()
-    
-    # Display header
-    st.markdown('<div class="aws-header"><h1>☁️ AWS CloudWatch SQL Server Monitor</h1><p>Enterprise-grade monitoring with AI-powered analytics and auto-remediation - Optimized for Streamlit Cloud</p></div>', unsafe_allow_html=True)
-    
-    # Setup sidebar configuration
-    aws_config = setup_sidebar_configuration()
-    
-    # Initialize session state
-    initialize_session_state(aws_config)
-    
-    # Display connection status and test button
-    display_connection_status()
-    
-    # Collect metrics
-    with st.spinner("🔄 Collecting metrics and logs..."):
-        all_metrics, all_logs, ec2_instances = collect_comprehensive_metrics()
-    
-    # Get RDS instances
-    rds_instances = st.session_state.cloudwatch_connector.get_rds_instances() if st.session_state.cloudwatch_connector else []
-    
-    # Get basic infrastructure metrics
-    basic_metric_queries = [
-        {'key': 'cpu_usage', 'namespace': 'AWS/EC2', 'metric_name': 'CPUUtilization', 'unit': 'Percent'},
-        {'key': 'memory_usage', 'namespace': 'CWAgent', 'metric_name': 'Memory % Committed Bytes In Use', 'unit': 'Percent'},
-        {'key': 'disk_usage', 'namespace': 'CWAgent', 'metric_name': 'LogicalDisk % Free Space', 'unit': 'Percent'},
-        {'key': 'network_in', 'namespace': 'AWS/EC2', 'metric_name': 'NetworkIn', 'unit': 'Bytes'},
-        {'key': 'network_out', 'namespace': 'AWS/EC2', 'metric_name': 'NetworkOut', 'unit': 'Bytes'}
-    ]
-    
-    # Get basic infrastructure metrics
-    if st.session_state.cloudwatch_connector:
-        current_time = datetime.now()
-        start_time = current_time - timedelta(hours=24)
-        basic_metrics = st.session_state.cloudwatch_connector.get_cloudwatch_metrics(
-            basic_metric_queries, start_time, current_time
-        )
-        all_metrics.update(basic_metrics)
-    
-    # Main tabs
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
-        "🏠 Dashboard", 
-        "🗄️ SQL Metrics",
-        "🖥️ OS Metrics",
-        "🔄 Always On", 
-        "🤖 Auto-Remediation",
-        "🔮 Predictive Analytics", 
-        "🚨 Alerts", 
-        "📊 Performance",
-        "📈 Reports",
-        "🔍 EC2 Debug"
-    ])
-    
-    # Render tabs
-    with tab1:
-        render_dashboard_tab(all_metrics, ec2_instances, rds_instances)
-    
-    with tab2:
-        render_sql_metrics_tab(all_metrics, ec2_instances)
-    
-    with tab3:
-        render_os_metrics_tab(all_metrics, ec2_instances)
-    
-    with tab4:
-        render_always_on_tab()
-    
-    with tab5:
-        render_auto_remediation_tab(all_metrics, aws_config.get('enable_auto_remediation', True))
-    
-    with tab6:
-        render_predictive_analytics_tab(all_metrics, aws_config.get('enable_predictive_alerts', True))
-    
-    with tab7:
-        render_alerts_tab(all_metrics, all_logs)
-    
-    with tab8:
-        render_performance_tab(all_metrics)
-    
-    with tab9:
-        render_reports_tab()
-    
-    with tab10:
-        debug_ec2_instances()
-    
-    # Auto-refresh functionality with Streamlit Cloud optimization
-    if 'last_refresh' not in st.session_state:
-        st.session_state.last_refresh = datetime.now()
-    
-    time_since_refresh = (datetime.now() - st.session_state.last_refresh).seconds
-    refresh_interval = aws_config.get('refresh_interval', 60)
-    
-    # Only auto-refresh if not in demo mode to avoid excessive API calls
-    if time_since_refresh >= refresh_interval and not st.session_state.cloudwatch_connector.demo_mode:
-        st.session_state.last_refresh = datetime.now()
-        st.rerun()
-    
-    # Enhanced status bar with Streamlit Cloud info
-    with st.sidebar:
-        st.markdown("---")
-        st.write(f"🔄 Last refresh: {st.session_state.last_refresh.strftime('%H:%M:%S')}")
-        
-        if not (st.session_state.cloudwatch_connector and st.session_state.cloudwatch_connector.demo_mode):
-            st.write(f"⏱️ Next refresh: {refresh_interval - time_since_refresh}s")
-        else:
-            st.write("⏱️ Auto-refresh disabled in demo mode")
-        
-        # Connection status indicator
-        if st.session_state.cloudwatch_connector:
-            conn_status = st.session_state.cloudwatch_connector.get_connection_status()
-            if conn_status.get('connected'):
-                if conn_status.get('demo_mode'):
-                    st.warning("🎭 Demo Mode")
-                else:
-                    st.success("🟢 AWS Connected")
-            else:
-                st.error("🔴 AWS Disconnected")
-            
-            # Environment info
-            if conn_status.get('streamlit_cloud'):
-                st.info("🌐 Streamlit Cloud")
-        
-        if st.button("🔄 Refresh Now", type="primary"):
-            # Clear cache for fresh data
-            collect_comprehensive_metrics.clear()
-            st.rerun()
-
-if __name__ == "__main__":
-    main().error(f"❓ **Unknown AWS Error:** {error_code}")
+                    st.error(f"❓ **Unknown AWS Error:** {error_code}")
                 
                 # Show the full error details
                 with st.expander("🔍 Full Error Details"):
@@ -3728,309 +2189,308 @@ class ClaudeAIAnalyzer:
             self.enabled = False
 
 # =================== Configuration Functions ===================
-def setup_sidebar_configuration():
-    """Setup sidebar configuration using embedded configuration"""
-    config_manager = get_embedded_config_manager()
-    
-    with st.sidebar:
-        st.header("🔧 AWS Configuration")
+    def setup_sidebar_configuration():
+        """Setup sidebar configuration using embedded configuration"""
+        config_manager = get_embedded_config_manager()
         
-        # Configuration Status
-        st.subheader("📄 Configuration Status")
-        config_summary = config_manager.get_configuration_summary()
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Config Version", config_summary["version"])
-        with col2:
-            st.metric("Total Log Groups", config_summary["total_log_groups"])
-        
-        st.success("✅ Embedded configuration loaded")
-        
-        # Environment Selection
-        st.subheader("🏢 Environment Configuration")
-        available_environments = config_manager.get_available_environments()
-        
-        # Show environment summary
-        with st.expander("📊 Environment Summary"):
-            for env, count in config_summary["environments"].items():
-                st.write(f"**{env.title()}:** {count} log groups")
-        
-        selected_environment = st.selectbox(
-            "Select Environment",
-            available_environments,
-            index=0 if "production" in available_environments else 0,
-            help="Choose the environment to monitor"
-        )
-        
-        # AWS Credentials
-        st.subheader("🔑 AWS Credentials")
-        
-        auth_method = st.radio(
-            "Authentication Method",
-            [
-                "🌍 Environment Variables (Recommended for Streamlit Cloud)",
-                "🔑 Manual Input",
-                "🏢 Default Credential Chain"
-            ]
-        )
-        
-        aws_access_key = None
-        aws_secret_key = None
-        
-        if auth_method.startswith("🌍"):
-            st.info("💡 **Best for Streamlit Cloud deployment**")
-            st.code("""
-Environment Variables in Streamlit Cloud:
-AWS_ACCESS_KEY_ID=your_access_key_here
-AWS_SECRET_ACCESS_KEY=your_secret_key_here
-AWS_DEFAULT_REGION=us-east-2
-            """)
+        with st.sidebar:
+            st.header("🔧 AWS Configuration")
             
-            env_access_key = os.getenv('AWS_ACCESS_KEY_ID')
-            env_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+            # Configuration Status
+            st.subheader("📄 Configuration Status")
+            config_summary = config_manager.get_configuration_summary()
             
-            if env_access_key and env_secret_key:
-                st.success("✅ Environment variables detected!")
-                st.write(f"**Access Key:** {env_access_key[:8]}...")
-                aws_access_key = env_access_key
-                aws_secret_key = env_secret_key
-            else:
-                st.warning("⚠️ Environment variables not found")
-                st.info("📖 **Set in Streamlit Cloud:**\n1. Go to your app settings\n2. Add environment variables\n3. Restart your app")
-                
-        elif auth_method.startswith("🔑"):
-            st.info("💡 **For local development and testing**")
-            aws_access_key = st.text_input(
-                "AWS Access Key ID", 
-                type="password",
-                help="Your AWS Access Key ID (starts with AKIA or ASIA)",
-                placeholder="AKIAIOSFODNN7EXAMPLE"
-            )
-            
-            aws_secret_key = st.text_input(
-                "AWS Secret Access Key", 
-                type="password",
-                help="Your AWS Secret Access Key (40 characters)",
-                placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-            )
-            
-        else:
-            st.info("💡 **For EC2 instances with IAM roles**")
-            st.write("Will attempt to use:")
-            st.write("• EC2 instance profile")
-            st.write("• ECS task role")
-            st.write("• Shared credentials file")
-        
-        # Region selection with config default
-        default_region = config_summary["default_region"]
-        available_regions = config_manager.config.get("metadata", {}).get("regions", [
-            'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
-            'eu-west-1', 'eu-west-2', 'eu-central-1', 
-            'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1'
-        ])
-        
-        try:
-            default_index = available_regions.index(default_region)
-        except ValueError:
-            default_index = 1 if 'us-east-2' in available_regions else 0
-            
-        aws_region = st.selectbox("AWS Region", available_regions, index=default_index)
-        
-        # AWS Account Information
-        st.subheader("🏢 AWS Account Details")
-        aws_account_id = st.text_input("AWS Account ID (Optional)", 
-                                    help="Your 12-digit AWS Account ID")
-        aws_account_name = st.text_input("Account Name/Environment", 
-                                        value=selected_environment.title(), 
-                                        help="Environment name (e.g., Production, Staging)")
-
-        # Dynamic CloudWatch Configuration
-        st.subheader("📊 CloudWatch Configuration")
-        
-        # Log Groups Configuration by Category
-        st.write("**📝 CloudWatch Log Groups Configuration:**")
-        
-        # Show available categories for selected environment
-        env_config = config_manager.config.get("environments", {}).get(selected_environment, {})
-        
-        log_group_selection = st.radio(
-            "Log Group Selection Method",
-            ["📋 Use All Configured Groups", "🔧 Select by Category", "✏️ Custom Configuration"]
-        )
-        
-        selected_log_groups = []
-        
-        if log_group_selection == "📋 Use All Configured Groups":
-            # Use all configured log groups for the environment
-            selected_log_groups = config_manager.get_all_log_groups_for_environment(selected_environment)
-            
-            st.success(f"✅ Using {len(selected_log_groups)} pre-configured log groups for {selected_environment}")
-            
-            # Show summary by category
-            with st.expander(f"📊 Log Groups for {selected_environment.title()}"):
-                for category in ["ec2_metrics", "sql_metrics", "os_metrics"]:
-                    category_groups = config_manager.get_log_groups_by_environment_and_category(selected_environment, category)
-                    if category_groups:
-                        category_name = category.replace('_', ' ').title()
-                        st.write(f"**{category_name}:** {len(category_groups)} groups")
-                        for i, group in enumerate(category_groups[:3]):  # Show first 3
-                            st.write(f"  {i+1}. {group}")
-                        if len(category_groups) > 3:
-                            st.write(f"  ... and {len(category_groups) - 3} more groups")
-        
-        elif log_group_selection == "🔧 Select by Category":
-            # Allow user to select specific categories
-            st.write("**Select monitoring categories:**")
-            
-            col1, col2, col3 = st.columns(3)
-            
+            col1, col2 = st.columns(2)
             with col1:
-                enable_ec2_metrics = st.checkbox("🖥️ EC2 Metrics", value=True)
-                if enable_ec2_metrics:
-                    ec2_groups = config_manager.get_log_groups_by_environment_and_category(selected_environment, "ec2_metrics")
-                    st.caption(f"{len(ec2_groups)} log groups")
-            
+                st.metric("Config Version", config_summary["version"])
             with col2:
-                enable_sql_metrics = st.checkbox("🗄️ SQL Server Metrics", value=True)
-                if enable_sql_metrics:
-                    sql_groups = config_manager.get_log_groups_by_environment_and_category(selected_environment, "sql_metrics")
-                    st.caption(f"{len(sql_groups)} log groups")
+                st.metric("Total Log Groups", config_summary["total_log_groups"])
             
-            with col3:
-                enable_os_metrics = st.checkbox("💻 OS Metrics", value=True)
-                if enable_os_metrics:
-                    os_groups = config_manager.get_log_groups_by_environment_and_category(selected_environment, "os_metrics")
-                    st.caption(f"{len(os_groups)} log groups")
+            st.success("✅ Embedded configuration loaded")
             
-            # Build selected log groups based on checkboxes
-            if enable_ec2_metrics:
-                selected_log_groups.extend(
-                    config_manager.get_log_groups_by_environment_and_category(selected_environment, "ec2_metrics")
-                )
+            # Environment Selection
+            st.subheader("🏢 Environment Configuration")
+            available_environments = config_manager.get_available_environments()
             
-            if enable_sql_metrics:
-                selected_log_groups.extend(
-                    config_manager.get_log_groups_by_environment_and_category(selected_environment, "sql_metrics")
-                )
+            # Show environment summary
+            with st.expander("📊 Environment Summary"):
+                for env, count in config_summary["environments"].items():
+                    st.write(f"**{env.title()}:** {count} log groups")
             
-            if enable_os_metrics:
-                selected_log_groups.extend(
-                    config_manager.get_log_groups_by_environment_and_category(selected_environment, "os_metrics")
-                )
-            
-            st.info(f"📊 Selected {len(selected_log_groups)} log groups across chosen categories")
-        
-        else:  # Custom Configuration
-            # Allow manual input
-            all_configured_groups = config_manager.get_all_log_groups_for_environment(selected_environment)
-            
-            st.info("✏️ **Custom log group configuration**")
-            custom_log_groups = st.text_area(
-                "Log Groups (one per line)",
-                value="\n".join(all_configured_groups[:10]),  # Show first 10 as default
-                height=200,
-                help="Enter CloudWatch log group names, one per line"
+            selected_environment = st.selectbox(
+                "Select Environment",
+                available_environments,
+                index=0 if "production" in available_environments else 0,
+                help="Choose the environment to monitor"
             )
-            selected_log_groups = [lg.strip() for lg in custom_log_groups.split('\n') if lg.strip()]
-        
-        # Metrics Namespace Configuration
-        default_namespace = config_manager.get_metrics_namespace(selected_environment, "sql_metrics")
-        custom_namespace = st.text_input(
-            "Custom Metrics Namespace", 
-            value=default_namespace,
-            help="Namespace for your custom SQL Server metrics"
-        )
-
-        # OS Metrics Configuration
-        st.write("**🖥️ OS Metrics Configuration:**")
-        enable_os_metrics_flag = st.checkbox("Enable OS-level Metrics", value=True)
-        os_metrics_namespace = st.text_input(
-            "OS Metrics Namespace",
-            value=config_manager.get_metrics_namespace(selected_environment, "os_metrics"),
-            help="CloudWatch namespace for OS metrics"
-        )
-        
-        # Monitoring Settings from Configuration
-        monitoring_settings = config_manager.get_monitoring_settings()
-        
-        st.markdown("---")
-        
-        # Claude AI Configuration
-        st.subheader("🤖 Claude AI Settings")
-        claude_config = config_manager.config.get("integration_settings", {}).get("claude_ai", {})
-        
-        claude_api_key = st.text_input("Claude AI API Key", type="password", 
-                                    help="Enter your Anthropic Claude API key")
-        
-        if claude_api_key and ANTHROPIC_AVAILABLE:
-            if 'claude_analyzer' not in st.session_state or st.session_state.claude_analyzer is None:
-                st.session_state.claude_analyzer = ClaudeAIAnalyzer(claude_api_key)
             
-            if hasattr(st.session_state.claude_analyzer, 'enabled') and st.session_state.claude_analyzer.enabled:
-                st.success("✅ Claude AI Connected")
+            # AWS Credentials
+            st.subheader("🔑 AWS Credentials")
+            
+            auth_method = st.radio(
+                "Authentication Method",
+                [
+                    "🌍 Environment Variables (Recommended for Streamlit Cloud)",
+                    "🔑 Manual Input",
+                    "🏢 Default Credential Chain"
+                ]
+            )
+            
+            aws_access_key = None
+            aws_secret_key = None
+            
+            if auth_method.startswith("🌍"):
+                st.info("💡 **Best for Streamlit Cloud deployment**")
+                st.code("""
+    Environment Variables in Streamlit Cloud:
+    AWS_ACCESS_KEY_ID=your_access_key_here
+    AWS_SECRET_ACCESS_KEY=your_secret_key_here
+    AWS_DEFAULT_REGION=us-east-2
+                """)
+                
+                env_access_key = os.getenv('AWS_ACCESS_KEY_ID')
+                env_secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+                
+                if env_access_key and env_secret_key:
+                    st.success("✅ Environment variables detected!")
+                    st.write(f"**Access Key:** {env_access_key[:8]}...")
+                    aws_access_key = env_access_key
+                    aws_secret_key = env_secret_key
+                else:
+                    st.warning("⚠️ Environment variables not found")
+                    st.info("📖 **Set in Streamlit Cloud:**\n1. Go to your app settings\n2. Add environment variables\n3. Restart your app")
+                    
+            elif auth_method.startswith("🔑"):
+                st.info("💡 **For local development and testing**")
+                aws_access_key = st.text_input(
+                    "AWS Access Key ID", 
+                    type="password",
+                    help="Your AWS Access Key ID (starts with AKIA or ASIA)",
+                    placeholder="AKIAIOSFODNN7EXAMPLE"
+                )
+                
+                aws_secret_key = st.text_input(
+                    "AWS Secret Access Key", 
+                    type="password",
+                    help="Your AWS Secret Access Key (40 characters)",
+                    placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+                )
+                
             else:
-                st.error("❌ Claude AI Connection Failed")
-        
-        st.markdown("---")
-        
-        # Auto-Remediation Settings
-        st.subheader("🔧 Auto-Remediation")
-        enable_auto_remediation = st.checkbox(
-            "Enable Auto-Remediation", 
-            value=monitoring_settings.get("enable_auto_remediation", True)
-        )
-        auto_approval_threshold = st.selectbox("Auto-Approval Level", [
-            "Low Risk Only",
-            "Low + Medium Risk", 
-            "All Except Critical",
-            "Manual Approval Required"
-        ])
-        
-        st.markdown("---")
-        
-        # Monitoring Settings
-        st.subheader("📊 Monitoring Settings")
-        refresh_interval = st.slider(
-            "Refresh Interval (seconds)", 
-            30, 300, 
-            monitoring_settings.get("refresh_interval_seconds", 60)
-        )
-        metric_retention_days = st.slider("Metric Retention (days)", 7, 90, 30)
-        enable_predictive_alerts = st.checkbox(
-            "Enable Predictive Alerts", 
-            value=monitoring_settings.get("enable_predictive_analytics", True)
-        )
-        
-        # Configuration Summary
-        with st.expander("📋 Configuration Summary"):
-            st.write(f"**Environment:** {selected_environment}")
-            st.write(f"**Region:** {aws_region}")
-            st.write(f"**Log Groups:** {len(selected_log_groups)}")
-            st.write(f"**Metrics Namespace:** {custom_namespace}")
-            st.write(f"**Auto-Remediation:** {'Enabled' if enable_auto_remediation else 'Disabled'}")
-            st.write(f"**Refresh Interval:** {refresh_interval}s")
-            st.write(f"**Config Version:** {config_summary['version']}")
-        
-        return {
-            'access_key': aws_access_key or 'demo',
-            'secret_key': aws_secret_key or 'demo',
-            'region': aws_region,
-            'account_id': aws_account_id,
-            'account_name': aws_account_name,
-            'environment': selected_environment,
-            'log_groups': selected_log_groups,
-            'custom_namespace': custom_namespace,
-            'os_metrics_namespace': os_metrics_namespace,
-            'enable_os_metrics': enable_os_metrics_flag,
-            'claude_api_key': claude_api_key,
-            'enable_auto_remediation': enable_auto_remediation,
-            'auto_approval_threshold': auto_approval_threshold,
-            'refresh_interval': refresh_interval,
-            'enable_predictive_alerts': enable_predictive_alerts,
-            'config_manager': config_manager
-        }
+                st.info("💡 **For EC2 instances with IAM roles**")
+                st.write("Will attempt to use:")
+                st.write("• EC2 instance profile")
+                st.write("• ECS task role")
+                st.write("• Shared credentials file")
+            
+            # Region selection with config default
+            default_region = config_summary["default_region"]
+            available_regions = config_manager.config.get("metadata", {}).get("regions", [
+                'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
+                'eu-west-1', 'eu-west-2', 'eu-central-1', 
+                'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1'
+            ])
+            
+            try:
+                default_index = available_regions.index(default_region)
+            except ValueError:
+                default_index = 1 if 'us-east-2' in available_regions else 0
+                
+            aws_region = st.selectbox("AWS Region", available_regions, index=default_index)
+            
+            # AWS Account Information
+            st.subheader("🏢 AWS Account Details")
+            aws_account_id = st.text_input("AWS Account ID (Optional)", 
+                                        help="Your 12-digit AWS Account ID")
+            aws_account_name = st.text_input("Account Name/Environment", 
+                                            value=selected_environment.title(), 
+                                            help="Environment name (e.g., Production, Staging)")
 
+            # Dynamic CloudWatch Configuration
+            st.subheader("📊 CloudWatch Configuration")
+            
+            # Log Groups Configuration by Category
+            st.write("**📝 CloudWatch Log Groups Configuration:**")
+            
+            # Show available categories for selected environment
+            env_config = config_manager.config.get("environments", {}).get(selected_environment, {})
+            
+            log_group_selection = st.radio(
+                "Log Group Selection Method",
+                ["📋 Use All Configured Groups", "🔧 Select by Category", "✏️ Custom Configuration"]
+            )
+            
+            selected_log_groups = []
+            
+            if log_group_selection == "📋 Use All Configured Groups":
+                # Use all configured log groups for the environment
+                selected_log_groups = config_manager.get_all_log_groups_for_environment(selected_environment)
+                
+                st.success(f"✅ Using {len(selected_log_groups)} pre-configured log groups for {selected_environment}")
+                
+                # Show summary by category
+                with st.expander(f"📊 Log Groups for {selected_environment.title()}"):
+                    for category in ["ec2_metrics", "sql_metrics", "os_metrics"]:
+                        category_groups = config_manager.get_log_groups_by_environment_and_category(selected_environment, category)
+                        if category_groups:
+                            category_name = category.replace('_', ' ').title()
+                            st.write(f"**{category_name}:** {len(category_groups)} groups")
+                            for i, group in enumerate(category_groups[:3]):  # Show first 3
+                                st.write(f"  {i+1}. {group}")
+                            if len(category_groups) > 3:
+                                st.write(f"  ... and {len(category_groups) - 3} more groups")
+            
+            elif log_group_selection == "🔧 Select by Category":
+                # Allow user to select specific categories
+                st.write("**Select monitoring categories:**")
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    enable_ec2_metrics = st.checkbox("🖥️ EC2 Metrics", value=True)
+                    if enable_ec2_metrics:
+                        ec2_groups = config_manager.get_log_groups_by_environment_and_category(selected_environment, "ec2_metrics")
+                        st.caption(f"{len(ec2_groups)} log groups")
+                
+                with col2:
+                    enable_sql_metrics = st.checkbox("🗄️ SQL Server Metrics", value=True)
+                    if enable_sql_metrics:
+                        sql_groups = config_manager.get_log_groups_by_environment_and_category(selected_environment, "sql_metrics")
+                        st.caption(f"{len(sql_groups)} log groups")
+                
+                with col3:
+                    enable_os_metrics = st.checkbox("💻 OS Metrics", value=True)
+                    if enable_os_metrics:
+                        os_groups = config_manager.get_log_groups_by_environment_and_category(selected_environment, "os_metrics")
+                        st.caption(f"{len(os_groups)} log groups")
+                
+                # Build selected log groups based on checkboxes
+                if enable_ec2_metrics:
+                    selected_log_groups.extend(
+                        config_manager.get_log_groups_by_environment_and_category(selected_environment, "ec2_metrics")
+                    )
+                
+                if enable_sql_metrics:
+                    selected_log_groups.extend(
+                        config_manager.get_log_groups_by_environment_and_category(selected_environment, "sql_metrics")
+                    )
+                
+                if enable_os_metrics:
+                    selected_log_groups.extend(
+                        config_manager.get_log_groups_by_environment_and_category(selected_environment, "os_metrics")
+                    )
+                
+                st.info(f"📊 Selected {len(selected_log_groups)} log groups across chosen categories")
+            
+            else:  # Custom Configuration
+                # Allow manual input
+                all_configured_groups = config_manager.get_all_log_groups_for_environment(selected_environment)
+                
+                st.info("✏️ **Custom log group configuration**")
+                custom_log_groups = st.text_area(
+                    "Log Groups (one per line)",
+                    value="\n".join(all_configured_groups[:10]),  # Show first 10 as default
+                    height=200,
+                    help="Enter CloudWatch log group names, one per line"
+                )
+                selected_log_groups = [lg.strip() for lg in custom_log_groups.split('\n') if lg.strip()]
+            
+            # Metrics Namespace Configuration
+            default_namespace = config_manager.get_metrics_namespace(selected_environment, "sql_metrics")
+            custom_namespace = st.text_input(
+                "Custom Metrics Namespace", 
+                value=default_namespace,
+                help="Namespace for your custom SQL Server metrics"
+            )
+
+            # OS Metrics Configuration
+            st.write("**🖥️ OS Metrics Configuration:**")
+            enable_os_metrics_flag = st.checkbox("Enable OS-level Metrics", value=True)
+            os_metrics_namespace = st.text_input(
+                "OS Metrics Namespace",
+                value=config_manager.get_metrics_namespace(selected_environment, "os_metrics"),
+                help="CloudWatch namespace for OS metrics"
+            )
+            
+            # Monitoring Settings from Configuration
+            monitoring_settings = config_manager.get_monitoring_settings()
+            
+            st.markdown("---")
+            
+            # Claude AI Configuration
+            st.subheader("🤖 Claude AI Settings")
+            claude_config = config_manager.config.get("integration_settings", {}).get("claude_ai", {})
+            
+            claude_api_key = st.text_input("Claude AI API Key", type="password", 
+                                        help="Enter your Anthropic Claude API key")
+            
+            if claude_api_key and ANTHROPIC_AVAILABLE:
+                if 'claude_analyzer' not in st.session_state or st.session_state.claude_analyzer is None:
+                    st.session_state.claude_analyzer = ClaudeAIAnalyzer(claude_api_key)
+                
+                if hasattr(st.session_state.claude_analyzer, 'enabled') and st.session_state.claude_analyzer.enabled:
+                    st.success("✅ Claude AI Connected")
+                else:
+                    st.error("❌ Claude AI Connection Failed")
+            
+            st.markdown("---")
+            
+            # Auto-Remediation Settings
+            st.subheader("🔧 Auto-Remediation")
+            enable_auto_remediation = st.checkbox(
+                "Enable Auto-Remediation", 
+                value=monitoring_settings.get("enable_auto_remediation", True)
+            )
+            auto_approval_threshold = st.selectbox("Auto-Approval Level", [
+                "Low Risk Only",
+                "Low + Medium Risk", 
+                "All Except Critical",
+                "Manual Approval Required"
+            ])
+            
+            st.markdown("---")
+            
+            # Monitoring Settings
+            st.subheader("📊 Monitoring Settings")
+            refresh_interval = st.slider(
+                "Refresh Interval (seconds)", 
+                30, 300, 
+                monitoring_settings.get("refresh_interval_seconds", 60)
+            )
+            metric_retention_days = st.slider("Metric Retention (days)", 7, 90, 30)
+            enable_predictive_alerts = st.checkbox(
+                "Enable Predictive Alerts", 
+                value=monitoring_settings.get("enable_predictive_analytics", True)
+            )
+            
+            # Configuration Summary
+            with st.expander("📋 Configuration Summary"):
+                st.write(f"**Environment:** {selected_environment}")
+                st.write(f"**Region:** {aws_region}")
+                st.write(f"**Log Groups:** {len(selected_log_groups)}")
+                st.write(f"**Metrics Namespace:** {custom_namespace}")
+                st.write(f"**Auto-Remediation:** {'Enabled' if enable_auto_remediation else 'Disabled'}")
+                st.write(f"**Refresh Interval:** {refresh_interval}s")
+                st.write(f"**Config Version:** {config_summary['version']}")
+            
+            return {
+                'access_key': aws_access_key or 'demo',
+                'secret_key': aws_secret_key or 'demo',
+                'region': aws_region,
+                'account_id': aws_account_id,
+                'account_name': aws_account_name,
+                'environment': selected_environment,
+                'log_groups': selected_log_groups,
+                'custom_namespace': custom_namespace,
+                'os_metrics_namespace': os_metrics_namespace,
+                'enable_os_metrics': enable_os_metrics_flag,
+                'claude_api_key': claude_api_key,
+                'enable_auto_remediation': enable_auto_remediation,
+                'auto_approval_threshold': auto_approval_threshold,
+                'refresh_interval': refresh_interval,
+                'enable_predictive_alerts': enable_predictive_alerts,
+                'config_manager': config_manager
+            }
 def initialize_session_state(aws_config):
     """Initialize session state variables"""
     if 'cloudwatch_connector' not in st.session_state:
